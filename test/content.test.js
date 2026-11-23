@@ -19,6 +19,9 @@ function htmlResponse(html, contentType = "text/html; charset=utf-8") {
   };
 }
 
+// Test hosts like site.example do not resolve; skip the SSRF DNS check for them.
+const OPEN = { fetch: { allowPrivateNetwork: true } };
+
 const LONG = "Real article paragraph with plenty of meaningful words. ".repeat(20);
 
 // ── HTML extraction ──────────────────────────────────────────
@@ -45,7 +48,7 @@ test("htmlToText: attribute values containing '>' don't leak", () => {
 });
 
 test("get_contents: direct fetch used for static pages (no Tavily credits)", async () => {
-  env = setup({ tavily: { keys: ["tvly-A"] } }, (call) =>
+  env = setup({ ...OPEN, tavily: { keys: ["tvly-A"] } }, (call) =>
     call.provider === "web" ? htmlResponse(`<title>T</title><article><p>${LONG}</p></article>`) : ok({})
   );
   const out = await env.tools.dispatchTool("web_get_contents", { url: "https://site.example/page" });
@@ -54,7 +57,7 @@ test("get_contents: direct fetch used for static pages (no Tavily credits)", asy
 });
 
 test("get_contents: thin/JS-rendered page falls back to Tavily Extract", async () => {
-  env = setup({ tavily: { keys: ["tvly-A"] } }, (call) =>
+  env = setup({ ...OPEN, tavily: { keys: ["tvly-A"] } }, (call) =>
     call.provider === "web"
       ? htmlResponse(`<body><div id="root">Loading the application, please wait...</div></body>`)
       : ok({ results: [{ url: "https://site.example/page", raw_content: "Rendered content ![img](x.png)" }] })
@@ -65,7 +68,7 @@ test("get_contents: thin/JS-rendered page falls back to Tavily Extract", async (
 });
 
 test("get_contents: PDF without Tavily key gives actionable error", async () => {
-  env = setup({}, () => htmlResponse("%PDF-1.7", "application/pdf"));
+  env = setup(OPEN, () => htmlResponse("%PDF-1.7", "application/pdf"));
   await assert.rejects(
     env.tools.dispatchTool("web_get_contents", { url: "https://site.example/doc.pdf" }),
     /Configure a Tavily API key/
@@ -73,9 +76,9 @@ test("get_contents: PDF without Tavily key gives actionable error", async () => 
 });
 
 test("get_contents: respects maxChars", async () => {
-  env = setup({}, () => htmlResponse(`<article><p>${LONG.repeat(10)}</p></article>`));
+  env = setup(OPEN, () => htmlResponse(`<article><p>${LONG.repeat(10)}</p></article>`));
   const out = await env.tools.dispatchTool("web_get_contents", { url: "https://site.example/p", maxChars: 600 });
-  assert.match(out, /truncated at 600 characters/);
+  assert.match(out, /more characters — call again with offset=600/);
   assert.ok(out.length < 800);
 });
 

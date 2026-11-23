@@ -1,47 +1,139 @@
 /**
- * In-memory key health tracker shared by the Exa and Tavily rotators.
+ * Key health tracker shared by the Exa and Tavily rotators.
  *
- * A key that gets rejected is put on cooldown so subsequent requests skip it
- * instead of wasting a round-trip on a key that is known to be exhausted.
- * State lives in memory only — a server restart clears all cooldowns.
+ * A key that gets rejected is put on cooldown so later requests skip it instead
+ * of wasting a round-trip on a key that is known to be exhausted.
+ *
+ * Cooldowns are persisted to a small JSON state file so they survive server
+ * restarts (MCP clients usually start a fresh server per session) and are
+ * shared between concurrent sessions. The file never contains keys — only a
+ * short SHA-256 fingerprint of each key.
+ *
+ * State file location (client-agnostic, works with any MCP client):
+ *   1. WEB_ACCESS_STATE_FILE env
+ *   2. next to the config file: <config dir>/web-access-state.json
+ *      (default ~/.openclaude/web-access-state.json)
+ * Set WEB_ACCESS_STATE_FILE=off (or "none") to keep cooldowns in memory only.
  */
+
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+const { configPath } = require("./config");
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
 
-// HTTP status → how long to skip the key
+// HTTP status → how long to skip the key. Only statuses that are about the
+// KEY belong here. 403 is deliberately absent: Tavily uses it for "URL not
+// supported" and Exa for prohibited content / disabled features — rotating
+// keys would not help and would wrongly bench a healthy key.
 const COOLDOWNS = {
-  429: 1 * MINUTE, // rate limited — short pause
-  402: 24 * HOUR, // out of credits / payment required
-  432: 24 * HOUR, // Tavily: plan credit limit exceeded
+  429: 1 * MINUTE, // rate limited — short pause (or Retry-After, if longer)
+  402: 24 * HOUR, // out of credits / budget exceeded (Exa)
+  432: 24 * HOUR, // Tavily: key or plan credit limit exceeded
   433: 24 * HOUR, // Tavily: pay-as-you-go limit exceeded
   401: 6 * HOUR, // invalid key — retried later in case it was a transient auth issue
-  403: 6 * HOUR, // forbidden
 };
+const MAX_RETRY_AFTER = 1 * HOUR;
 
-const _state = new Map(); // "provider:key" → { until, status, at }
+let _state = new Map(); // fingerprint → { until, status, at, provider }
+let _loadedFrom = null;
+let _loadedMtime = -1;
 
-const id = (provider, key) => `${provider}:${key}`;
+function stateFile() {
+  const env = (process.env.WEB_ACCESS_STATE_FILE || "").trim();
+  if (/^(off|none|false|0)$/i.test(env)) return null;
+  if (env) return env;
+  return path.join(path.dirname(configPath()), "web-access-state.json");
+}
+
+function fingerprint(provider, key) {
+  return `${provider}:${crypto.createHash("sha256").update(`${provider}:${key}`).digest("hex").slice(0, 16)}`;
+}
+
+/** (Re)load the state file when it changed on disk (another session may have written it). */
+function sync() {
+  const file = stateFile();
+  if (!file) return;
+  let mtime = -1;
+  try {
+    mtime = fs.statSync(file).mtimeMs;
+  } catch {
+    if (_loadedFrom !== file) {
+      _state = new Map();
+      _loadedFrom = file;
+      _loadedMtime = -1;
+    }
+    return;
+  }
+  if (_loadedFrom === file && _loadedMtime === mtime) return;
+  try {
+    const data = JSON.parse(fs.readFileSync(file, "utf-8"));
+    const now = Date.now();
+    _state = new Map(
+      Object.entries(data?.cooldowns || {}).filter(([, v]) => v && Number(v.until) > now)
+    );
+  } catch {
+    _state = new Map();
+  }
+  _loadedFrom = file;
+  _loadedMtime = mtime;
+}
+
+function persist() {
+  const file = stateFile();
+  if (!file) return;
+  try {
+    const now = Date.now();
+    const cooldowns = {};
+    for (const [k, v] of _state) if (v.until > now) cooldowns[k] = v;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, cooldowns }, null, 2));
+    fs.renameSync(tmp, file);
+    _loadedFrom = file;
+    _loadedMtime = fs.statSync(file).mtimeMs;
+  } catch (err) {
+    console.error(`[key-health] Could not save state to ${file}: ${err.message}`);
+  }
+}
 
 function shouldRotate(status) {
   return Object.prototype.hasOwnProperty.call(COOLDOWNS, status);
 }
 
-function markFailure(provider, key, status) {
+/**
+ * Put a key on cooldown. For 429, a Retry-After header (seconds or HTTP date)
+ * extends the default pause, capped at 1 hour.
+ */
+function markFailure(provider, key, status, { retryAfter } = {}) {
   if (!key || !shouldRotate(status)) return;
+  sync();
   const now = Date.now();
-  _state.set(id(provider, key), { until: now + COOLDOWNS[status], status, at: now });
+  let ms = COOLDOWNS[status];
+  if (status === 429 && retryAfter) {
+    const secs = Number(retryAfter);
+    const ra = Number.isFinite(secs) ? secs * 1000 : Date.parse(retryAfter) - now;
+    if (ra > ms) ms = Math.min(ra, MAX_RETRY_AFTER);
+  }
+  _state.set(fingerprint(provider, key), { until: now + ms, status, at: now, provider });
+  persist();
 }
 
 function markSuccess(provider, key) {
-  if (key) _state.delete(id(provider, key));
+  if (!key) return;
+  sync();
+  if (_state.delete(fingerprint(provider, key))) persist();
 }
 
 function cooldownOf(provider, key) {
-  const s = _state.get(id(provider, key));
+  sync();
+  const id = fingerprint(provider, key);
+  const s = _state.get(id);
   if (!s) return null;
   if (s.until <= Date.now()) {
-    _state.delete(id(provider, key));
+    _state.delete(id);
     return null;
   }
   return s;
@@ -67,7 +159,8 @@ function describeKeys(provider, keys) {
 }
 
 function reset() {
-  _state.clear();
+  _state = new Map();
+  persist();
 }
 
 module.exports = {
@@ -79,4 +172,5 @@ module.exports = {
   describeKeys,
   maskKey,
   reset,
+  stateFile,
 };

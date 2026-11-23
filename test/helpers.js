@@ -16,6 +16,7 @@ const ENV_KEYS = [
   "EXA_API_KEY",
   "EXA_API_KEYS",
   "WEB_SEARCH_PROVIDER",
+  "WEB_ACCESS_STATE_FILE",
 ];
 
 const realFetch = global.fetch;
@@ -44,7 +45,8 @@ function setup(config = {}, handler = () => ok({})) {
     const call = {
       url: String(url),
       provider: String(url).includes("exa.ai") ? "exa" : String(url).includes("tavily") ? "tavily" : "web",
-      auth: init.headers?.Authorization?.replace(/^Bearer /, "") || null,
+      auth: init.headers?.Authorization?.replace(/^Bearer /, "") || init.headers?.["x-api-key"] || null,
+      rest: String(url).includes("api.exa.ai"),
       body: init.body ? JSON.parse(init.body) : null,
       signal: init.signal,
     };
@@ -77,14 +79,36 @@ function ok(json) {
   return { ok: true, status: 200, json: async () => json, text: async () => JSON.stringify(json) };
 }
 
-function fail(status, text = "error") {
-  return { ok: false, status, statusText: text, json: async () => ({}), text: async () => text };
+function fail(status, text = "error", headers = {}) {
+  return {
+    ok: false,
+    status,
+    statusText: text,
+    headers: new Map(Object.entries(headers)),
+    json: async () => ({}),
+    text: async () => text,
+  };
 }
 
-/** Exa MCP SSE response containing the given result text. */
+/**
+ * Exa response that works for both transports: .text() is the MCP SSE body,
+ * .json() is the REST /search body built from the same items.
+ */
 function exaOk(text) {
   const payload = JSON.stringify({ result: { content: [{ type: "text", text }] } });
-  return { ok: true, status: 200, text: async () => `event: message\ndata: ${payload}\n\n` };
+  const results = text.split(/\n---+\n/).map((b) => ({
+    title: b.match(/Title: (.+)/)?.[1],
+    url: b.match(/URL: (.+)/)?.[1],
+    publishedDate: (b.match(/Published: (.+)/)?.[1] || "").replace("N/A", "") || null,
+    highlights: [b.match(/Highlights: (.+)/)?.[1] || "snippet"],
+  }));
+  return {
+    ok: true,
+    status: 200,
+    headers: new Map(),
+    text: async () => `event: message\ndata: ${payload}\n\n`,
+    json: async () => ({ requestId: "r", results, costDollars: { total: 0.005 } }),
+  };
 }
 
 function exaText(items) {

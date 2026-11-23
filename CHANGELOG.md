@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.5.0 — 2026-11-23
+
+### Added
+- **Exa REST API** when Exa keys are configured: native `includeDomains`, `startPublishedDate` and `category` filters, `type` (`auto`/`lite`/`deep`), highlight-based snippets and per-request cost tracking. Keyless still uses Exa's MCP endpoint.
+- `category` parameter (`news`, `publication`, `company`, `personal site`, `financial report`, `people`) on `web_search` and `web_search_exa`.
+- `includeAnswer` on `web_search`: the Tavily answer and/or Exa `/answer`. Both are shown in `both` mode.
+- `maxCharsPerResult` for compact snippets on all search tools.
+- `web_map` and `web_crawl` tools (Tavily Map/Crawl).
+- `offset` paging in `web_get_contents`. The document is cached, so paging does not re-download it.
+- `web_access_status` shows remaining Tavily credits (from `/usage`, cached for 10 minutes) and Exa spend this session.
+- Persistent key cooldowns in `web-access-state.json` next to the config file (key fingerprints only, never keys). Override with `WEB_ACCESS_STATE_FILE`, or set it to `off`.
+- 429 cooldowns honour `Retry-After` (max 1 h).
+- SSRF protection: private, loopback and link-local addresses are refused, including on every redirect hop. Opt in with `fetch.allowPrivateNetwork`.
+- Download cap for direct fetches (`fetch.maxBytes`, default 5 MB).
+- GitHub Actions CI on Node 18/20/22 × Linux/Windows, with manifest checks.
+
+### Changed
+- `both` mode ranks with Reciprocal Rank Fusion. Hits found by both providers come first, followed by single-provider hits interleaved by rank.
+- In `auto` mode, filtered queries go to Tavily first only when Exa has no key.
+- A 403 no longer puts a key on cooldown, because it is not a key problem.
+- Exa `livecrawl` is mapped to `maxAgeHours`. The legacy `type` values `neural`/`keyword` are treated as `auto`.
+
+### Not included
+- `web_find_similar`: Exa has deprecated `/findSimilar`.
+
+
 ## 1.4.1 — 2026-11-23
 
 ### Fixed

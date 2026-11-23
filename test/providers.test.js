@@ -112,20 +112,24 @@ test("exa: keylessFallback=false surfaces the error", async () => {
   assert.equal(env.calls.length, 1);
 });
 
-test("exa: quota error inside a 200 MCP body also rotates", async () => {
+test("exa REST: keys use api.exa.ai with x-api-key; out of credits (402) rotates", async () => {
   env = setup({ exa: { keys: ["e-1", "e-2"] } }, (call) =>
-    call.auth === "e-1"
-      ? {
-          ok: true,
-          status: 200,
-          text: async () =>
-            `data: ${JSON.stringify({ result: { isError: true, content: [{ type: "text", text: "Rate limit exceeded" }] } })}`,
-        }
-      : exaOk(EXA_ONE)
+    call.auth === "e-1" ? fail(402, '{"error":"no credits","tag":"NO_MORE_CREDITS"}') : exaOk(EXA_ONE)
   );
   const out = await env.tools.dispatchTool("web_search", { query: "q", provider: "exa" });
   assert.match(out, /Exa Result/);
-  assert.deepEqual(env.calls.map((c) => c.auth), ["e-1", "e-2"]);
+  assert.deepEqual(env.calls.map((c) => [c.auth, c.rest]), [["e-1", true], ["e-2", true]]);
+});
+
+test("exa keyless MCP: quota message inside a 200 body is surfaced", async () => {
+  env = setup({}, () => ({
+    ok: true,
+    status: 200,
+    text: async () =>
+      `data: ${JSON.stringify({ result: { isError: true, content: [{ type: "text", text: "Rate limit exceeded" }] } })}`,
+  }));
+  await assert.rejects(env.tools.dispatchTool("web_search", { query: "q", provider: "exa" }), /Rate limit exceeded/);
+  assert.equal(env.calls[0].rest, false);
 });
 
 test("exa: non-retryable error does not burn through keys", async () => {

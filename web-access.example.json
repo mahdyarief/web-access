@@ -15,5 +15,9 @@
       "tvly-xxxxxxxxxxxxxxxx",
       "tvly-yyyyyyyyyyyyyyyy"
     ]
+  },
+  "fetch": {
+    "allowPrivateNetwork": false,
+    "maxBytes": 5242880
   }
 }

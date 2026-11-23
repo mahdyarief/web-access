@@ -15,6 +15,8 @@ const DEFAULT_MAX_CHARS = 8000;
 // Matches a tag even when quoted attribute values contain ">" (e.g. Wikipedia data-mw)
 const TAG = /<(?:[^>"']|"[^"]*"|'[^']*')*>/g;
 
+const { assertPublicUrl, BlockedUrlError } = require("./url-guard");
+
 class UnsupportedContentError extends Error {}
 
 const BROWSER_HEADERS = {
@@ -24,26 +26,91 @@ const BROWSER_HEADERS = {
   "Accept-Language": "en-US,en;q=0.7,id;q=0.5",
 };
 
-async function fetchWebContent(url, { maxChars = DEFAULT_MAX_CHARS } = {}) {
-  const response = await fetch(url, {
+const DEFAULT_MAX_BYTES = 5 * 1024 * 1024; // stop downloading after 5 MB
+const MAX_REDIRECTS = 5;
+
+function fetchSettings() {
+  const f = require("./config").loadConfig()?.fetch || {};
+  return {
+    allowPrivate: f.allowPrivateNetwork === true,
+    maxBytes: Number(f.maxBytes) > 0 ? Number(f.maxBytes) : DEFAULT_MAX_BYTES,
+  };
+}
+
+/**
+ * Fetch with manual redirect handling so every hop passes the SSRF guard.
+ */
+async function guardedFetch(url, { allowPrivate, signal }) {
+  let current = url;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    await assertPublicUrl(current, { allowPrivate });
+    const response = await fetch(current, { signal, headers: BROWSER_HEADERS, redirect: "manual" });
+    const location = response.headers.get("location");
+    if (response.status >= 300 && response.status < 400 && location) {
+      current = new URL(location, current).toString();
+      continue;
+    }
+    return { response, finalUrl: current };
+  }
+  throw new Error(`Too many redirects (>${MAX_REDIRECTS})`);
+}
+
+/** Read at most maxBytes of the body; never buffers an unbounded response. */
+async function readLimited(response, maxBytes) {
+  if (!response.body || typeof response.body.getReader !== "function") {
+    const buf = new Uint8Array(await response.arrayBuffer());
+    return { buf: buf.slice(0, maxBytes), cut: buf.length > maxBytes };
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  let cut = false;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (size + value.length > maxBytes) {
+      chunks.push(value.slice(0, maxBytes - size));
+      size = maxBytes;
+      cut = true;
+      await reader.cancel().catch(() => {});
+      break;
+    }
+    chunks.push(value);
+    size += value.length;
+  }
+  const buf = new Uint8Array(size);
+  let pos = 0;
+  for (const c of chunks) {
+    buf.set(c, pos);
+    pos += c.length;
+  }
+  return { buf, cut };
+}
+
+/**
+ * Fetch a URL and return its full readable document: { title, text, finalUrl, bytesCut }.
+ * Paging / truncation for the model is done by the caller (see paginate()).
+ */
+async function fetchDocument(url) {
+  const { allowPrivate, maxBytes } = fetchSettings();
+  const { response, finalUrl } = await guardedFetch(url, {
+    allowPrivate,
     signal: AbortSignal.timeout(15000),
-    headers: BROWSER_HEADERS,
-    redirect: "follow",
   });
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    throw new Error(`HTTP ${response.status}: ${response.statusText || ""}`.trim());
   }
 
   const contentType = (response.headers.get("content-type") || "").toLowerCase();
-  if (/application\/pdf/.test(contentType) || /\.pdf($|\?)/i.test(new URL(response.url || url).pathname)) {
+  if (/application\/pdf/.test(contentType) || /\.pdf$/i.test(new URL(finalUrl).pathname)) {
     throw new UnsupportedContentError("PDF documents are not supported by the direct fetcher");
   }
   if (contentType && !/text\/|html|xml|json|javascript|markdown/.test(contentType)) {
     throw new UnsupportedContentError(`Unsupported content type: ${contentType}`);
   }
 
-  const buf = new Uint8Array(await response.arrayBuffer());
+  const { buf, cut } = await readLimited(response, maxBytes);
   const raw = decode(buf, contentType);
 
   let title = "";
@@ -58,12 +125,29 @@ async function fetchWebContent(url, { maxChars = DEFAULT_MAX_CHARS } = {}) {
   if (text.length < 50) {
     throw new Error("Page content is empty or couldn't be extracted (possibly JS-rendered)");
   }
+  return { title, text, finalUrl, bytesCut: cut ? maxBytes : 0 };
+}
 
-  const truncated = text.length > maxChars;
-  text = text.slice(0, maxChars);
-  if (truncated) text += `\n\n[… truncated at ${maxChars} characters]`;
+/**
+ * Return one window of a long text plus a hint for reading the next part.
+ */
+function paginate(text, { offset = 0, maxChars = DEFAULT_MAX_CHARS } = {}) {
+  const total = text.length;
+  const start = Math.min(Math.max(0, Math.floor(offset) || 0), total);
+  const end = Math.min(start + maxChars, total);
+  let out = text.slice(start, end);
+  if (start > 0) out = `[… characters ${start}–${end} of ${total}]\n\n${out}`;
+  if (end < total) {
+    out += `\n\n[… ${total - end} more characters — call again with offset=${end} to continue]`;
+  }
+  return out;
+}
 
-  return title ? `# ${title}\n\n${text}` : text;
+/** Backwards-compatible helper: first window of the document as text. */
+async function fetchWebContent(url, { maxChars = DEFAULT_MAX_CHARS, offset = 0 } = {}) {
+  const doc = await fetchDocument(url);
+  const body = paginate(doc.text, { offset, maxChars });
+  return doc.title && !offset ? `# ${doc.title}\n\n${body}` : body;
 }
 
 function decode(buf, contentType) {
@@ -142,4 +226,11 @@ function decodeEntities(s) {
   });
 }
 
-module.exports = { fetchWebContent, htmlToText, UnsupportedContentError };
+module.exports = {
+  fetchWebContent,
+  fetchDocument,
+  paginate,
+  htmlToText,
+  UnsupportedContentError,
+  BlockedUrlError,
+};

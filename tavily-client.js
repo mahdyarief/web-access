@@ -1,6 +1,7 @@
 const { keysInRotationOrder, hasKeys } = require("./tavily-rotator");
 const { loadConfig } = require("./config");
 const { markFailure, markSuccess, shouldRotate } = require("./key-health");
+const { formatItems } = require("./formatter");
 
 const TAVILY_API = "https://api.tavily.com";
 const DEFAULT_DEADLINE_MS = 45000; // total budget across all keys
@@ -67,7 +68,7 @@ async function attemptOnce(endpoint, payload, key, timeoutMs) {
   if (!response.ok) {
     const msg = `Tavily error ${response.status}: ${(await response.text()).slice(0, 300)}`;
     if (shouldRotate(response.status)) {
-      markFailure("tavily", key, response.status);
+      markFailure("tavily", key, response.status, { retryAfter: response.headers?.get?.("retry-after") });
       throw new RetryableError(msg);
     }
     if (response.status >= 500) throw new RetryableError(msg);
@@ -91,11 +92,57 @@ async function tavilySearch(opts) {
     topic: opts.topic || "general",
     include_answer: opts.includeAnswer ?? false,
     include_raw_content: opts.includeRawContent ?? false,
+    include_published_date: true,
   };
   if (opts.site) payload.include_domains = [opts.site];
   if (opts.recency) payload.time_range = opts.recency;
 
   return callTavily("/search", payload);
+}
+
+/**
+ * Tavily map — list the URLs of a site (no content). Requires a key.
+ * 1 credit per 10 pages (2 with instructions).
+ */
+async function tavilyMap(opts) {
+  const payload = { url: opts.url, max_depth: opts.maxDepth || 1, limit: opts.limit || 50 };
+  if (opts.instructions) payload.instructions = opts.instructions;
+  if (opts.selectPaths?.length) payload.select_paths = opts.selectPaths;
+  if (opts.excludePaths?.length) payload.exclude_paths = opts.excludePaths;
+  payload.allow_external = opts.allowExternal === true;
+  return callTavily("/map", payload, { deadlineMs: 160000 });
+}
+
+/**
+ * Tavily crawl — map + extract pages of a site in one call. Requires a key.
+ * Cost ≈ map cost + extract cost (e.g. 10 pages basic ≈ 3 credits).
+ */
+async function tavilyCrawl(opts) {
+  const payload = {
+    url: opts.url,
+    max_depth: opts.maxDepth || 1,
+    limit: opts.limit || 10,
+    extract_depth: opts.extractDepth || "basic",
+    format: "markdown",
+    allow_external: opts.allowExternal === true,
+  };
+  if (opts.instructions) payload.instructions = opts.instructions;
+  if (opts.selectPaths?.length) payload.select_paths = opts.selectPaths;
+  if (opts.excludePaths?.length) payload.exclude_paths = opts.excludePaths;
+  return callTavily("/crawl", payload, { deadlineMs: 160000 });
+}
+
+/**
+ * Tavily credit usage for one key: GET /usage (rate limit: 10 req / 10 min).
+ * Not rotated — it reports on the specific key passed in.
+ */
+async function tavilyUsage(key) {
+  const response = await fetch(`${TAVILY_API}/usage`, {
+    headers: { Authorization: `Bearer ${key}` },
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw new Error(`Tavily usage error ${response.status}`);
+  return response.json();
 }
 
 /**
@@ -111,20 +158,23 @@ async function tavilyExtract(urls, { extractDepth = "basic" } = {}) {
 
 // ── Formatting ─────────────────────────────────────────────────
 
-function formatTavilySearch(data, { maxContentChars = 2000 } = {}) {
+/** Tavily search response → shared result items. */
+function tavilyItems(data) {
+  return (data?.results || []).map((r) => ({
+    title: r.title,
+    url: r.url,
+    published: r.published_date || "",
+    content: r.raw_content || r.content || "",
+    score: typeof r.score === "number" ? r.score : undefined,
+  }));
+}
+
+function formatTavilySearch(data, opts = {}) {
   const parts = [];
   if (data?.answer) parts.push(`**Answer:** ${data.answer.trim()}`);
-
-  const results = data?.results || [];
-  if (results.length === 0 && parts.length === 0) return "No results found.";
-
-  for (const r of results) {
-    let out = `### [${r.title || r.url}](${r.url || ""})`;
-    if (r.published_date) out += `\n_${r.published_date}_`;
-    const body = (r.raw_content || r.content || "").trim();
-    if (body) out += `\n\n${body.slice(0, maxContentChars)}`;
-    parts.push(out);
-  }
+  const items = tavilyItems(data);
+  if (items.length === 0 && parts.length === 0) return "No results found.";
+  if (items.length) parts.push(formatItems(items, opts));
   return parts.join("\n\n---\n\n");
 }
 
@@ -162,4 +212,15 @@ function formatTavilyExtract(data, { maxChars = 8000 } = {}) {
   return parts.length ? parts.join("\n\n---\n\n") : "No content extracted.";
 }
 
-module.exports = { callTavily, tavilySearch, tavilyExtract, formatTavilySearch, formatTavilyExtract };
+module.exports = {
+  callTavily,
+  tavilySearch,
+  tavilyExtract,
+  formatTavilySearch,
+  formatTavilyExtract,
+  cleanExtracted,
+  tavilyItems,
+  tavilyMap,
+  tavilyCrawl,
+  tavilyUsage,
+};

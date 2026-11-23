@@ -1,41 +1,41 @@
 /**
- * Format search results and build search queries.
+ * Result model shared by all providers, merging and formatting.
+ *
+ * Every provider is normalized to items of the form
+ *   { title, url, published, content, score? }
+ * so formatting, compact output and multi-provider merging work the same way.
  */
 
-function formatSearchResults(raw) {
-  if (!raw || raw.trim().length === 0) {
-    return "No results found.";
-  }
+const DEFAULT_SNIPPET_CHARS = 1200;
+const RRF_K = 60; // standard Reciprocal Rank Fusion constant
 
-  const blocks = raw.split(/\n---+\n/);
-  const formatted = blocks
-    .map((block) => {
-      const titleMatch = block.match(/Title:\s*(.+)/);
-      const urlMatch = block.match(/URL:\s*(.+)/);
-      const publishedMatch = block.match(/Published:\s*(.+)/);
-      const highlightsMatch = block.match(/Highlights:\s*([\s\S]*?)(?=\n\w+:|$)/);
+/** Clamp the per-result snippet length requested by the caller. */
+function snippetLimit(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_SNIPPET_CHARS;
+  return Math.min(Math.max(Math.floor(n), 100), 10000);
+}
 
-      if (!titleMatch) return block.trim();
+/** Cut text at a word boundary close to max, marking the cut with "…". */
+function truncate(text, max) {
+  const t = (text || "").trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max * 0.7 ? cut.slice(0, space) : cut).trimEnd()} …`;
+}
 
-      const title = titleMatch[1].trim();
-      const url = urlMatch ? urlMatch[1].trim() : "";
-      const published = cleanDate(publishedMatch?.[1]);
-      const highlights = highlightsMatch
-        ? highlightsMatch[1].trim()
-        : extractedContent(raw, block);
-
-      let out = `### [${title}](${url || ""})`;
-      if (published) out += `\n_${published}_`;
-      if (highlights) out += `\n\n${highlights}`;
-      return out;
-    })
-    .join("\n\n---\n\n");
-
-  return formatted;
+function cleanDate(v) {
+  const d = (v || "").trim();
+  if (/^(n\/?a|null|undefined|unknown|none)?$/i.test(d)) return "";
+  // ISO timestamps → date only; keep anything else as given
+  const iso = d.match(/^(\d{4}-\d{2}-\d{2})T/);
+  return iso ? iso[1] : d;
 }
 
 /**
- * Parse Exa's text output into structured items: {title, url, published, content}.
+ * Parse Exa MCP's text output into items. (The REST client returns JSON and
+ * does not need this.)
  */
 function parseExaResults(raw) {
   if (!raw || !raw.trim()) return [];
@@ -49,15 +49,19 @@ function parseExaResults(raw) {
         title,
         url: block.match(/URL:\s*(.+)/)?.[1]?.trim() || "",
         published: cleanDate(block.match(/Published:\s*(.+)/)?.[1]),
-        content: highlights || extractedContent(raw, block),
+        content: highlights || extractedContent(block),
       };
     })
     .filter(Boolean);
 }
 
-function cleanDate(v) {
-  const d = (v || "").trim();
-  return /^(n\/?a|null|undefined|unknown|none)?$/i.test(d) ? "" : d;
+function extractedContent(block) {
+  return block
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !/^(Title|URL|Published|Author|Highlights):/i.test(l))
+    .join("\n")
+    .trim();
 }
 
 function normalizeUrl(url) {
@@ -75,88 +79,80 @@ function normalizeUrl(url) {
 }
 
 /**
- * Interleave results from several providers (rank-fair), dedupe by URL.
+ * Merge ranked lists from several providers with Reciprocal Rank Fusion:
+ * score(url) = Σ 1 / (K + rank), K = 60. Agreement between providers is a
+ * strong relevance signal: with K = 60 a result found by both ranks above any
+ * single-provider result (top-10 lists). Single-provider results are then
+ * interleaved fairly by rank (e#1, t#1, e#2, t#2, …).
+ * Duplicates are detected by normalized URL; the longer snippet is kept.
+ *
  * lists: [{ source: "exa", items: [...] }, { source: "tavily", items: [...] }]
  */
 function mergeResults(lists, limit) {
-  const merged = [];
   const byUrl = new Map();
-  const maxLen = Math.max(0, ...lists.map((l) => l.items.length));
-  for (let i = 0; i < maxLen; i++) {
-    for (const { source, items } of lists) {
-      const item = items[i];
-      if (!item) continue;
-      const key = normalizeUrl(item.url) || `${source}:${i}`;
-      const existing = byUrl.get(key);
-      if (existing) {
-        if (!existing.sources.includes(source)) existing.sources.push(source);
-        if (!existing.published && item.published) existing.published = item.published;
-        if ((item.content || "").length > (existing.content || "").length) existing.content = item.content;
-        continue;
+  let order = 0;
+  for (const { source, items } of lists) {
+    items.forEach((item, rank) => {
+      const key = normalizeUrl(item.url) || `${source}:${rank}`;
+      let entry = byUrl.get(key);
+      if (!entry) {
+        entry = { ...item, sources: [], rrf: 0, firstSeen: order++ };
+        byUrl.set(key, entry);
+      } else {
+        if (!entry.published && item.published) entry.published = item.published;
+        if ((item.content || "").length > (entry.content || "").length) entry.content = item.content;
       }
-      const entry = { ...item, sources: [source] };
-      byUrl.set(key, entry);
-      merged.push(entry);
-    }
+      if (!entry.sources.includes(source)) entry.sources.push(source);
+      entry.rrf += 1 / (RRF_K + rank + 1);
+    });
   }
-  // Results found by both providers are stronger signals — float them up (stable)
-  merged.sort((a, b) => b.sources.length - a.sources.length);
-  return merged.slice(0, limit);
+  return [...byUrl.values()]
+    .sort((a, b) => b.rrf - a.rrf || a.firstSeen - b.firstSeen)
+    .slice(0, limit);
 }
 
-function formatItems(items, { maxContentChars = 2000 } = {}) {
-  if (!items.length) return "No results found.";
+/**
+ * Render items as Markdown.
+ * @param {object} opts
+ *   maxCharsPerResult — snippet length per result (compact output)
+ *   showSources — append "via exa + tavily" (merged results)
+ */
+function formatItems(items, { maxCharsPerResult, showSources = false } = {}) {
+  if (!items || !items.length) return "No results found.";
+  const max = snippetLimit(maxCharsPerResult);
   return items
     .map((r) => {
       let out = `### [${r.title || r.url}](${r.url || ""})`;
-      const meta = [r.published, r.sources ? `via ${r.sources.join(" + ")}` : ""].filter(Boolean);
+      const meta = [cleanDate(r.published), showSources && r.sources ? `via ${r.sources.join(" + ")}` : ""].filter(Boolean);
       if (meta.length) out += `\n_${meta.join(" · ")}_`;
-      if (r.content) out += `\n\n${r.content.trim().slice(0, maxContentChars)}`;
+      if (r.content) out += `\n\n${truncate(r.content, max)}`;
       return out;
     })
     .join("\n\n---\n\n");
 }
 
-function extractedContent(raw, block) {
-  const lines = block.split("\n").filter((l) => l.trim());
-  const contentLines = lines.filter(
-    (l) =>
-      !/^(Title|URL|Published|Author|Highlights):/i.test(l.trim()) &&
-      l.trim().length > 0
-  );
-  return contentLines.join("\n").trim().slice(0, 2000);
+/** Exa MCP text → Markdown (keyless path). */
+function formatSearchResults(raw, opts = {}) {
+  if (!raw || raw.trim().length === 0) return "No results found.";
+  const items = parseExaResults(raw);
+  return items.length ? formatItems(items, opts) : truncate(raw, snippetLimit(opts.maxCharsPerResult) * 5);
 }
 
+/** Query-text hints for backends without native filters (Exa MCP keyless). */
 function buildSearchQuery(query, options) {
   let enriched = query;
-
-  if (options.site) {
-    enriched = `${enriched} site:${options.site}`;
-  }
-
-  if (options.recency) {
-    const now = new Date();
-    let since;
-    switch (options.recency) {
-      case "day":
-        since = new Date(now.getTime() - 86400000);
-        break;
-      case "week":
-        since = new Date(now.getTime() - 7 * 86400000);
-        break;
-      case "month":
-        since = new Date(now.getTime() - 30 * 86400000);
-        break;
-      case "year":
-        since = new Date(now.getTime() - 365 * 86400000);
-        break;
-    }
-    if (since) {
-      enriched = `${enriched} after:${since.toISOString().split("T")[0]}`;
-    }
-  }
-
+  if (options.site) enriched = `${enriched} site:${options.site}`;
+  const since = recencyToDate(options.recency);
+  if (since) enriched = `${enriched} after:${since.slice(0, 10)}`;
   return enriched;
+}
+
+const RECENCY_DAYS = { day: 1, week: 7, month: 30, year: 365 };
+
+/** "week" → ISO timestamp 7 days ago (or null). */
+function recencyToDate(recency) {
+  const days = RECENCY_DAYS[recency];
+  return days ? new Date(Date.now() - days * 86400000).toISOString() : null;
 }
 
 module.exports = {
@@ -165,4 +161,9 @@ module.exports = {
   parseExaResults,
   mergeResults,
   formatItems,
+  normalizeUrl,
+  truncate,
+  snippetLimit,
+  cleanDate,
+  recencyToDate,
 };

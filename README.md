@@ -1,8 +1,8 @@
-# web-access-mcp
+# web-access
 
 <img src=".claude-plugin/icon.png" alt="" width="96" align="right">
 
-[Bahasa Indonesia](README.id.md) · [Changelog](CHANGELOG.md) · MIT licensed · [![test](https://github.com/mahdyarief/web-access-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/mahdyarief/web-access-mcp/actions/workflows/test.yml)
+[Bahasa Indonesia](README.id.md) · [Changelog](CHANGELOG.md) · MIT licensed · [![test](https://github.com/mahdyarief/web-access/actions/workflows/test.yml/badge.svg)](https://github.com/mahdyarief/web-access/actions/workflows/test.yml)
 
 A zero-dependency local [MCP](https://modelcontextprotocol.io) server, packaged as a Claude Code plugin, that gives AI coding agents web access through **[Exa](https://exa.ai) and [Tavily](https://tavily.com)**:
 
@@ -52,14 +52,14 @@ Works on Windows, macOS and Linux. CI covers Node 18, 20 and 22 on Linux and Win
 ### Claude Code plugin (recommended)
 
 ```
-/plugin marketplace add mahdyarief/web-access-mcp
+/plugin marketplace add mahdyarief/web-access
 /plugin install web-access@mahdyarief
 ```
 
 On Claude Code 2.1.275 or later, a single command does both:
 
 ```
-/plugin install web-access --marketplace mahdyarief/web-access-mcp
+/plugin install web-access --marketplace mahdyarief/web-access
 ```
 
 During install, Claude Code asks for the plugin options. **All of them are optional**:
@@ -75,7 +75,7 @@ The key fields are marked *sensitive*. Claude Code stores them in your OS creden
 From a shell (for scripts or CI):
 
 ```bash
-claude plugin marketplace add mahdyarief/web-access-mcp
+claude plugin marketplace add mahdyarief/web-access
 claude plugin install web-access@mahdyarief
 echo '{"tavily_api_keys":"tvly-aaa,tvly-bbb","search_provider":"auto"}' \
   | claude plugin configure web-access@mahdyarief --values-stdin
@@ -94,7 +94,7 @@ The plugin bundles:
 The server is client-agnostic. Its config and state live in plain files, not in any client-specific folder. Clone the repo and point your client at `server.js`:
 
 ```bash
-git clone https://github.com/mahdyarief/web-access-mcp.git
+git clone https://github.com/mahdyarief/web-access.git
 ```
 
 ```json
@@ -102,7 +102,7 @@ git clone https://github.com/mahdyarief/web-access-mcp.git
   "mcpServers": {
     "web-access": {
       "command": "node",
-      "args": ["/absolute/path/to/web-access-mcp/server.js"],
+      "args": ["/absolute/path/to/web-access/server.js"],
       "env": {
         "TAVILY_API_KEYS": "tvly-aaa,tvly-bbb",
         "EXA_API_KEYS": ""
@@ -309,7 +309,7 @@ How the `both` ranking works: each result scores Σ 1/(60 + rank) over the provi
 
 1. **Direct fetch**, which is free.
    - It refuses internal and private addresses, including on every redirect hop.
-   - It stops downloading after 5 MB.
+   - It stops downloading after 25 MB.
    - It decodes the page using its declared charset.
    - It prefers `<article>`/`<main>` content, drops navigation, header, footer, forms and scripts, and keeps headings and lists.
 2. **Tavily Extract**, used only with a Tavily key, when the direct fetch fails (blocked, timeout, HTTP error), when the URL is a **PDF** or other document, or when the page yields under ~300 characters (usually JS-rendered). Internal URLs are never sent to Tavily.
@@ -351,7 +351,7 @@ The default path is `~/.openclaude/web-access.json`. Override it with `WEB_ACCES
   },
   "fetch": {
     "allowPrivateNetwork": false,
-    "maxBytes": 5242880
+    "maxBytes": 26214400
   }
 }
 ```
@@ -366,7 +366,7 @@ The default path is `~/.openclaude/web-access.json`. Override it with `WEB_ACCES
 | `tavily.keys` | `[]` | Tavily API keys (`tvly-...`). Tavily is disabled without at least one key. |
 | `tavily.timeoutMs` | `45000` | Time budget for one Tavily search (extract: 90 s, map/crawl: 160 s). |
 | `fetch.allowPrivateNetwork` | `false` | Allows `web_get_contents` to read localhost and private-network URLs, for example local dev docs. |
-| `fetch.maxBytes` | `5242880` | Download cap for direct fetches (5 MB). |
+| `fetch.maxBytes` | `26214400` | Download cap for direct fetches (25 MB). |
 
 `"exa"` and `"tavily"` can also be plain arrays of keys. The file is **re-read automatically when it changes**, so you don't need to restart.
 
@@ -445,7 +445,7 @@ Credit numbers come from Tavily's credits documentation at the time of writing, 
   - hostnames that resolve to any of these, checked again on every redirect
   
   Internal URLs are never forwarded to Tavily. This reduces risk but is not a full network sandbox (DNS rebinding could still race the check).
-- **Resource limits**: direct downloads stop at 5 MB (`fetch.maxBytes`).
+- **Resource limits**: direct downloads stop at 25 MB (`fetch.maxBytes`).
 - **Config file**: `~/.openclaude/web-access.json` is plain text. Keep it private and never commit it. This repo's `.gitignore` excludes it, the state file and the legacy key files.
 - **Leaked key**: if a key ever ends up in a chat, log or commit, rotate it in the provider's dashboard.
 
@@ -516,14 +516,14 @@ test/                 node:test suite (fully mocked)
 ## Development and releasing
 
 ```bash
-git clone https://github.com/mahdyarief/web-access-mcp.git
-cd web-access-mcp
+git clone https://github.com/mahdyarief/web-access.git
+cd web-access
 npm test                          # fully mocked: no network, no keys
 claude plugin validate .          # validate the plugin manifest
 claude plugin validate .claude-plugin/marketplace.json
 ```
 
-To try local changes in Claude Code, add the folder as a marketplace: `/plugin marketplace add ./path/to/web-access-mcp`.
+To try local changes in Claude Code, add the folder as a marketplace: `/plugin marketplace add ./path/to/web-access`.
 
 **Releasing a new version:**
 
@@ -532,7 +532,7 @@ To try local changes in Claude Code, add the folder as a marketplace: `/plugin m
 3. Run `npm test` and `claude plugin validate .`.
 4. Commit, push, and optionally tag with `claude plugin tag .`.
 
-Issues and pull requests are welcome at [github.com/mahdyarief/web-access-mcp](https://github.com/mahdyarief/web-access-mcp/issues).
+Issues and pull requests are welcome at [github.com/mahdyarief/web-access](https://github.com/mahdyarief/web-access/issues).
 
 ## License
 

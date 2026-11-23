@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.1 — 2026-11-23
+
+### Changed
+- The repository was renamed to **`mahdyarief/web-access`** (previously `web-access-mcp`). GitHub redirects the old URL. If updates stop working, re-add the marketplace: `/plugin marketplace remove mahdyarief` then `/plugin marketplace add mahdyarief/web-access`.
+- The default download cap for direct fetches (`fetch.maxBytes`) went up from 5 MB to **25 MB**.
+- The MCP server name reported to clients is now `web-access`.
+
 ## 1.5.0 — 2026-11-23
 
 ### Added

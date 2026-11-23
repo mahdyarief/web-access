@@ -1,8 +1,8 @@
-# web-access-mcp
+# web-access
 
 <img src=".claude-plugin/icon.png" alt="" width="96" align="right">
 
-[English](README.md) · [Changelog](CHANGELOG.md) · Lisensi MIT · [![test](https://github.com/mahdyarief/web-access-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/mahdyarief/web-access-mcp/actions/workflows/test.yml)
+[English](README.md) · [Changelog](CHANGELOG.md) · Lisensi MIT · [![test](https://github.com/mahdyarief/web-access/actions/workflows/test.yml/badge.svg)](https://github.com/mahdyarief/web-access/actions/workflows/test.yml)
 
 Server [MCP](https://modelcontextprotocol.io) lokal tanpa dependensi, dikemas sebagai plugin Claude Code, yang memberi agen AI akses web:
 
@@ -29,14 +29,14 @@ Bisa dipakai di Windows, macOS, dan Linux.
 ### Plugin Claude Code (disarankan)
 
 ```
-/plugin marketplace add mahdyarief/web-access-mcp
+/plugin marketplace add mahdyarief/web-access
 /plugin install web-access@mahdyarief
 ```
 
 Di Claude Code 2.1.275 ke atas, cukup satu perintah:
 
 ```
-/plugin install web-access --marketplace mahdyarief/web-access-mcp
+/plugin install web-access --marketplace mahdyarief/web-access
 ```
 
 Saat instalasi, Claude Code menanyakan opsi berikut. **Semuanya opsional**:
@@ -52,7 +52,7 @@ Key disimpan di penyimpanan kredensial OS, bukan di `settings.json`, dan tidak p
 Lewat terminal:
 
 ```bash
-claude plugin marketplace add mahdyarief/web-access-mcp
+claude plugin marketplace add mahdyarief/web-access
 claude plugin install web-access@mahdyarief
 echo '{"tavily_api_keys":"tvly-aaa,tvly-bbb"}' | claude plugin configure web-access@mahdyarief --values-stdin
 ```
@@ -69,7 +69,7 @@ Plugin ini berisi:
   "mcpServers": {
     "web-access": {
       "command": "node",
-      "args": ["/path/lengkap/web-access-mcp/server.js"],
+      "args": ["/path/lengkap/web-access/server.js"],
       "env": { "TAVILY_API_KEYS": "tvly-aaa,tvly-bbb" }
     }
   }
@@ -120,7 +120,7 @@ Semua tool pencarian, ekstraksi, map, dan crawl menerima `fresh: true` untuk mel
 | `tavily` | Tavily, Exa kalau Tavily gagal. Tanpa key Tavily, langsung pakai Exa dan diberi catatan. | Berita, kejadian terbaru |
 | `both` | Exa dan Tavily jalan paralel, lalu digabung dengan **Reciprocal Rank Fusion**. URL yang sama hanya tampil sekali. Hasil yang ditemukan keduanya (`via exa + tavily`) ditaruh paling atas, sisanya diselang-seling adil berdasarkan peringkat. | Riset, cek silang |
 
-**Ambil isi halaman:** diambil langsung dulu (gratis, maksimal 5 MB, alamat internal ditolak termasuk di setiap redirect). Tavily Extract hanya dipakai kalau pengambilan langsung gagal, kalau URL-nya PDF, atau kalau halamannya hampir kosong (biasanya dirender JavaScript). URL internal tidak pernah diteruskan ke Tavily. Dokumen di-cache utuh, jadi membaca bagian berikutnya dengan `offset` tidak mengunduh ulang.
+**Ambil isi halaman:** diambil langsung dulu (gratis, maksimal 25 MB, alamat internal ditolak termasuk di setiap redirect). Tavily Extract hanya dipakai kalau pengambilan langsung gagal, kalau URL-nya PDF, atau kalau halamannya hampir kosong (biasanya dirender JavaScript). URL internal tidak pernah diteruskan ke Tavily. Dokumen di-cache utuh, jadi membaca bagian berikutnya dengan `offset` tidak mengunduh ulang.
 
 **Cache:** hasil yang sukses disimpan di memori selama `cacheTtlSeconds` (default 600 detik). Error tidak pernah di-cache.
 
@@ -138,7 +138,7 @@ Key diambil dari sumber pertama yang berisi key, terpisah untuk tiap provider:
   "cacheTtlSeconds": 600,
   "exa":    { "keylessFallback": true, "timeoutMs": 45000, "keys": [] },
   "tavily": { "timeoutMs": 45000, "keys": ["tvly-..."] },
-  "fetch":  { "allowPrivateNetwork": false, "maxBytes": 5242880 }
+  "fetch":  { "allowPrivateNetwork": false, "maxBytes": 26214400 }
 }
 ```
 
@@ -149,7 +149,7 @@ Key diambil dari sumber pertama yang berisi key, terpisah untuk tiap provider:
 | `exa.keylessFallback` | `true` | Kalau semua key Exa ditolak, dicoba sekali lagi tanpa key. |
 | `*.timeoutMs` | `45000` | Batas waktu total satu request, untuk semua key sekaligus. |
 | `fetch.allowPrivateNetwork` | `false` | Izinkan `web_get_contents` membaca localhost/jaringan privat (misalnya dokumentasi lokal). |
-| `fetch.maxBytes` | `5242880` | Batas ukuran unduhan langsung (5 MB). |
+| `fetch.maxBytes` | `26214400` | Batas ukuran unduhan langsung (25 MB). |
 
 File ini dibaca ulang otomatis setiap kali berubah, jadi tidak perlu restart. Contoh lengkapnya ada di [`web-access.example.json`](web-access.example.json).
 

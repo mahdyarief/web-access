@@ -111,7 +111,7 @@ test("server: JSON-RPC compliance", async () => {
   ]);
   // notifications produce no responses
   assert.equal(res.length, 5);
-  assert.equal(res[0].result.serverInfo.name, "web-access-mcp");
+  assert.equal(res[0].result.serverInfo.name, "web-access");
   assert.deepEqual(res[1], { jsonrpc: "2.0", id: 2, result: {} });
   const names = res[2].result.tools.map((t) => t.name);
   for (const n of ["web_search", "web_search_tavily", "web_extract_tavily", "web_get_contents", "web_access_status"]) {

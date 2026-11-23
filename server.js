@@ -45,7 +45,7 @@ function handleRequest(request) {
     sendResult(id, {
       protocolVersion: params?.protocolVersion || "2024-11-05",
       capabilities: { tools: {} },
-      serverInfo: { name: "web-access-mcp", version: require("./package.json").version },
+      serverInfo: { name: "web-access", version: require("./package.json").version },
     });
     return;
   }

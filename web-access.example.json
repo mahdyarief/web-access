@@ -18,6 +18,6 @@
   },
   "fetch": {
     "allowPrivateNetwork": false,
-    "maxBytes": 5242880
+    "maxBytes": 26214400
   }
 }

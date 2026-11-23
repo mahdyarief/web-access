@@ -1,10 +1,10 @@
 {
-  "name": "web-access-mcp",
-  "version": "1.5.0",
+  "name": "web-access",
+  "version": "1.5.1",
   "description": "Local MCP server for web search (Exa + Tavily with API key rotation), URL content extraction and GitHub search. Zero dependencies.",
   "main": "server.js",
   "bin": {
-    "web-access-mcp": "server.js"
+    "web-access": "server.js"
   },
   "scripts": {
     "start": "node server.js",
@@ -37,10 +37,10 @@
   "author": "mahdyarief",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mahdyarief/web-access-mcp.git"
+    "url": "git+https://github.com/mahdyarief/web-access.git"
   },
-  "homepage": "https://github.com/mahdyarief/web-access-mcp#readme",
+  "homepage": "https://github.com/mahdyarief/web-access#readme",
   "bugs": {
-    "url": "https://github.com/mahdyarief/web-access-mcp/issues"
+    "url": "https://github.com/mahdyarief/web-access/issues"
   }
 }

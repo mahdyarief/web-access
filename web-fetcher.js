@@ -26,7 +26,7 @@ const BROWSER_HEADERS = {
   "Accept-Language": "en-US,en;q=0.7,id;q=0.5",
 };
 
-const DEFAULT_MAX_BYTES = 5 * 1024 * 1024; // stop downloading after 5 MB
+const DEFAULT_MAX_BYTES = 25 * 1024 * 1024; // stop downloading after 25 MB
 const MAX_REDIRECTS = 5;
 
 function fetchSettings() {

@@ -1,6 +1,6 @@
 {
   "name": "web-access",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Web search (Exa + Tavily with API key rotation), URL content extraction (HTML, PDF, JS-rendered pages) and GitHub search via a local zero-dependency MCP server. Exa works without any key.",
   "author": {
     "name": "mahdyarief",

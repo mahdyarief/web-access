@@ -113,7 +113,7 @@ const TOOLS = [
         query: { type: "string", description: "Search query" },
         numResults: {
           type: "number",
-          description: "Number of results (default 5)",
+          description: "Number of results (default 5, max 10)",
           default: 5,
         },
         livecrawl: {
@@ -127,6 +127,7 @@ const TOOLS = [
           description: "Search type: 'auto', 'keyword', or 'neural'",
           default: "auto",
         },
+        fresh: FRESH_PROP,
       },
       required: ["query"],
     },
@@ -244,7 +245,7 @@ const TOOLS = [
 async function rawExaSearch(args) {
   return callExaMcp("web_search_exa", {
     query: buildSearchQuery(args.query, args),
-    numResults: args.numResults || 5,
+    numResults: Math.min(Math.max(Number(args.numResults) || 5, 1), 10),
     livecrawl: args.livecrawl || "fallback",
     type: args.type || "auto",
   });
@@ -456,7 +457,8 @@ async function handleGithubSearch(args) {
 
 const CACHEABLE = {
   web_search: handleWebSearch,
-  web_search_exa: handleWebSearch,
+  // Exa-only variant: always Exa, regardless of the configured default provider
+  web_search_exa: (args) => handleWebSearch({ ...args, provider: "exa" }),
   web_search_tavily: handleTavilySearch,
   web_extract_tavily: handleTavilyExtract,
   web_get_contents: handleGetContents,
@@ -467,9 +469,7 @@ async function dispatchTool(toolName, args = {}) {
   if (handler) {
     const { fresh, ...keyArgs } = args;
     if (fresh || args.livecrawl === "always") return await handler(args);
-    // web_search_exa is an alias — share cache entries with web_search
-    const cacheTool = toolName === "web_search_exa" ? "web_search" : toolName;
-    return await cache.cached(cacheTool, keyArgs, () => handler(args));
+    return await cache.cached(toolName, keyArgs, () => handler(args));
   }
   if (toolName === "web_access_status") return handleStatus();
   if (toolName === "github_search") return await handleGithubSearch(args);

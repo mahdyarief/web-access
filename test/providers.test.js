@@ -216,13 +216,24 @@ test("config provider default + hot reload", async () => {
   assert.equal(env.calls[1].provider, "exa");
 });
 
+test("web_search_exa always uses Exa, even if default provider is tavily", async () => {
+  env = setup({ provider: "tavily", tavily: { keys: ["tvly-A"] } }, defaultHandler);
+  await env.tools.dispatchTool("web_search_exa", { query: "q" });
+  assert.deepEqual(env.calls.map((c) => c.provider), ["exa"]);
+});
+
+test("web_search: numResults clamped to 1..10 for Exa", async () => {
+  env = setup({}, defaultHandler);
+  await env.tools.dispatchTool("web_search", { query: "q", numResults: 99 });
+  assert.equal(env.calls[0].body.params.arguments.numResults, 10);
+});
+
 // ── Cache ────────────────────────────────────────────────────
 
 test("cache: identical search served from memory; fresh bypasses", async () => {
   env = setup({}, defaultHandler);
   await env.tools.dispatchTool("web_search", { query: "same" });
   await env.tools.dispatchTool("web_search", { query: "same " }); // whitespace-insensitive
-  await env.tools.dispatchTool("web_search_exa", { query: "same" }); // alias shares cache
   assert.equal(env.calls.length, 1);
   await env.tools.dispatchTool("web_search", { query: "same", fresh: true });
   assert.equal(env.calls.length, 2);

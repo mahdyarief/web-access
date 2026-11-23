@@ -1,5 +1,9 @@
 # web-access-mcp
 
+<img src=".claude-plugin/icon.png" alt="" width="96" align="right">
+
+[Bahasa Indonesia](README.id.md) · MIT licensed
+
 A zero-dependency local [MCP](https://modelcontextprotocol.io) server that gives AI coding agents web access:
 
 - **Web search** through [Exa](https://exa.ai) and [Tavily](https://tavily.com), with automatic fallback or merged results
@@ -39,18 +43,51 @@ All search and extract tools accept `fresh: true` to bypass the cache.
 
 ## Install
 
-### As a Claude Code / OpenClaude plugin
+### Claude Code plugin (recommended)
 
-The repo already contains `.claude-plugin/plugin.json` and `.mcp.json`. Install it as a plugin from this directory or repository.
+```
+/plugin marketplace add mahdyarief/web-access-mcp
+/plugin install web-access@mahdyarief
+```
 
-### As a plain MCP server
+On Claude Code 2.1.275 or later, a single command does both:
+
+```
+/plugin install web-access --marketplace mahdyarief/web-access-mcp
+```
+
+During install, Claude Code asks for the plugin options. All of them are optional:
+
+| Option | Meaning |
+|---|---|
+| **Tavily API keys** | `tvly-...` keys, comma separated, rotated automatically. Get them at [app.tavily.com](https://app.tavily.com). |
+| **Exa API keys** | Comma separated. Leave empty to use Exa keyless. |
+| **Default search provider** | `auto` (default), `exa`, `tavily` or `both`. |
+
+The key fields are marked *sensitive*, so Claude Code stores them in your OS credential store, not in `settings.json`. You can change them later with `/plugin configure web-access@mahdyarief` and then restart Claude Code. Run `/web-access:setup` for a guided check.
+
+From a shell:
+
+```bash
+claude plugin marketplace add mahdyarief/web-access-mcp
+claude plugin install web-access@mahdyarief
+echo '{"tavily_api_keys":"tvly-..."}' | claude plugin configure web-access@mahdyarief --values-stdin
+```
+
+The plugin bundles:
+- the MCP server (tools appear as `mcp__plugin_web-access_web-access__*`)
+- a **`web-research`** skill that teaches Claude when to use which tool
+- a **`/web-access:setup`** skill for configuring keys and diagnosing problems
+
+### Any other MCP client
 
 ```json
 {
   "mcpServers": {
     "web-access": {
       "command": "node",
-      "args": ["/path/to/web-access-mcp/server.js"]
+      "args": ["/path/to/web-access-mcp/server.js"],
+      "env": { "TAVILY_API_KEYS": "tvly-..." }
     }
   }
 }
@@ -58,7 +95,13 @@ The repo already contains `.claude-plugin/plugin.json` and `.mcp.json`. Install 
 
 ## Configuration
 
-All keys and settings live in one file: `~/.openclaude/web-access.json`. You can override the path with `WEB_ACCESS_CONFIG`. Copy [`web-access.example.json`](web-access.example.json) to get started:
+Keys are loaded from the first source that has any:
+
+1. **Environment / plugin settings**: `TAVILY_API_KEYS` / `TAVILY_API_KEY` and `EXA_API_KEYS` / `EXA_API_KEY` (comma separated). The Claude Code plugin fills these from its options.
+2. **Config file**: `~/.openclaude/web-access.json`, described below.
+3. **Legacy files**: `~/.openclaude/exa_keys.json` and `~/.openclaude/tavily_keys.json`.
+
+Every other setting lives in the config file: `~/.openclaude/web-access.json`. You can override the path with `WEB_ACCESS_CONFIG`. Copy [`web-access.example.json`](web-access.example.json) to get started:
 
 ```json
 {
@@ -87,7 +130,7 @@ All keys and settings live in one file: `~/.openclaude/web-access.json`. You can
 
 The file is re-read whenever it changes, so you can add or replace keys without restarting the server.
 
-**Other key sources:** the `TAVILY_API_KEYS` env var (comma-separated) and `TAVILY_API_KEY` override the config file for Tavily. The legacy files `~/.openclaude/exa_keys.json` and `~/.openclaude/tavily_keys.json`, or the `EXA_KEYS_FILE` and `TAVILY_KEYS_FILE` env vars, are still read when the unified config has no keys.
+You can point the legacy files elsewhere with `EXA_KEYS_FILE` / `TAVILY_KEYS_FILE`.
 
 > Keep your config file private. `.gitignore` already excludes `web-access.json` and the legacy key files.
 
@@ -113,4 +156,4 @@ npm test   # node:test suite, fully mocked — no network, no API keys needed
 
 ## License
 
-No license has been chosen yet. All rights are reserved by the author until one is added.
+[MIT](LICENSE) © mahdyarief

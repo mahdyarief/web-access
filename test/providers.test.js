@@ -54,6 +54,38 @@ test("tavily: env TAVILY_API_KEYS is honored", async () => {
   assert.equal(env.calls[0].auth, "tvly-ENV1");
 });
 
+// ── Plugin settings (env from .mcp.json user_config substitution) ──
+
+test("plugin env: keys from EXA_API_KEYS / TAVILY_API_KEYS take precedence", async () => {
+  env = setup({ tavily: { keys: ["tvly-FILE"] }, exa: { keys: ["e-file"] } }, defaultHandler);
+  process.env.TAVILY_API_KEYS = "tvly-P1,tvly-P2";
+  process.env.EXA_API_KEYS = "e-p1, e-p2";
+  await env.tools.dispatchTool("web_search_tavily", { query: "q" });
+  await env.tools.dispatchTool("web_search", { query: "q", provider: "exa" });
+  assert.deepEqual(env.calls.map((c) => c.auth), ["tvly-P1", "e-p1"]);
+  const status = await env.tools.dispatchTool("web_access_status", {});
+  assert.match(status, /2 key\(s\) from env \/ plugin settings/);
+});
+
+test("plugin env: unset options (literal placeholders / empty) are ignored", async () => {
+  env = setup({ tavily: { keys: ["tvly-FILE"] } }, defaultHandler);
+  process.env.TAVILY_API_KEYS = "${user_config.tavily_api_keys}";
+  process.env.EXA_API_KEYS = "";
+  process.env.WEB_SEARCH_PROVIDER = "${user_config.search_provider}";
+  await env.tools.dispatchTool("web_search_tavily", { query: "q" });
+  await env.tools.dispatchTool("web_search", { query: "q2" });
+  assert.equal(env.calls[0].auth, "tvly-FILE", "falls back to config file");
+  assert.equal(env.calls[1].provider, "exa", "provider falls back to auto");
+  assert.equal(env.calls[1].auth, null, "Exa keyless");
+});
+
+test("plugin env: invalid provider value falls back to auto", async () => {
+  env = setup({}, defaultHandler);
+  process.env.WEB_SEARCH_PROVIDER = "google";
+  await env.tools.dispatchTool("web_search", { query: "q" });
+  assert.equal(env.calls[0].provider, "exa");
+});
+
 // ── Exa: keyless support ─────────────────────────────────────
 
 test("exa: works keyless when no keys configured", async () => {

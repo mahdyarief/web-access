@@ -17,8 +17,8 @@ class RetryableError extends Error {}
 async function callTavily(endpoint, payload, { deadlineMs } = {}) {
   if (!hasKeys()) {
     throw new Error(
-      "No Tavily API keys configured. Add them to ~/.openclaude/web-access.json " +
-        '({"tavily": {"keys": ["tvly-..."]}}) or set TAVILY_API_KEY(S).'
+      "No Tavily API keys configured. Run /plugin configure web-access@mahdyarief " +
+        '(or add {"tavily": {"keys": ["tvly-..."]}} to ~/.openclaude/web-access.json, or set TAVILY_API_KEYS).'
     );
   }
   const keys = keysInRotationOrder();

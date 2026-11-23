@@ -13,7 +13,33 @@
   "engines": {
     "node": ">=18.17"
   },
-  "keywords": ["mcp", "model-context-protocol", "web-search", "exa", "tavily", "api-key-rotation", "github-search"],
-  "license": "UNLICENSED",
-  "files": ["*.js", ".claude-plugin/", ".mcp.json", "web-access.example.json", "README.md"]
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "web-search",
+    "exa",
+    "tavily",
+    "api-key-rotation",
+    "github-search"
+  ],
+  "license": "MIT",
+  "files": [
+    "*.js",
+    ".claude-plugin/",
+    ".mcp.json",
+    "skills/",
+    "web-access.example.json",
+    "README.md",
+    "README.id.md",
+    "LICENSE"
+  ],
+  "author": "mahdyarief",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mahdyarief/web-access-mcp.git"
+  },
+  "homepage": "https://github.com/mahdyarief/web-access-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/mahdyarief/web-access-mcp/issues"
+  }
 }

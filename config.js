@@ -51,8 +51,41 @@ function getProviderKeys(provider) {
   return [];
 }
 
-function getDefaultProvider() {
-  return (process.env.WEB_SEARCH_PROVIDER || loadConfig().provider || "auto").toLowerCase();
+const PROVIDERS = ["auto", "exa", "tavily", "both"];
+
+/**
+ * Read an env var, ignoring empty values and unsubstituted placeholders such
+ * as "${user_config.tavily_api_keys}" (left behind when a plugin option is unset).
+ */
+function envValue(name) {
+  const v = (process.env[name] || "").trim();
+  if (!v || /\$\{[^}]*\}/.test(v)) return "";
+  return v;
 }
 
-module.exports = { loadConfig, getProviderKeys, getDefaultProvider, configPath };
+/** Comma/space/newline separated key list from env vars (first non-empty wins). */
+function envKeys(...names) {
+  for (const n of names) {
+    const v = envValue(n);
+    if (v) return v.split(/[\s,;]+/).filter(Boolean);
+  }
+  return [];
+}
+
+function getDefaultProvider() {
+  for (const v of [envValue("WEB_SEARCH_PROVIDER"), loadConfig().provider]) {
+    const p = String(v || "").trim().toLowerCase();
+    if (PROVIDERS.includes(p)) return p;
+  }
+  return "auto";
+}
+
+module.exports = {
+  loadConfig,
+  getProviderKeys,
+  getDefaultProvider,
+  configPath,
+  envValue,
+  envKeys,
+  PROVIDERS,
+};

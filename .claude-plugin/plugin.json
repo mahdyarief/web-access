@@ -1,17 +1,36 @@
 {
   "name": "web-access",
-  "description": "Web access for OpenClaude — web search (Exa + Tavily with API key rotation), URL fetching/extraction, and GitHub search via local MCP server. Bypasses built-in WebSearch/WebFetch.",
-  "version": "1.3.0",
-  "keywords": [
-    "web",
-    "search",
-    "fetch",
-    "mcp",
-    "github",
-    "exa",
-    "tavily"
-  ],
+  "version": "1.4.0",
+  "description": "Web search (Exa + Tavily with API key rotation), URL content extraction (HTML, PDF, JS-rendered pages) and GitHub search via a local zero-dependency MCP server. Exa works without any key.",
   "author": {
-    "name": "Custom"
+    "name": "mahdyarief",
+    "url": "https://github.com/mahdyarief"
+  },
+  "homepage": "https://github.com/mahdyarief/web-access-mcp",
+  "repository": "https://github.com/mahdyarief/web-access-mcp",
+  "license": "MIT",
+  "keywords": ["web", "search", "fetch", "mcp", "github", "exa", "tavily", "research"],
+  "userConfig": {
+    "tavily_api_keys": {
+      "type": "string",
+      "title": "Tavily API keys",
+      "description": "Optional. One or more Tavily keys (tvly-...), comma separated — rotated automatically. Enables Tavily search, news/finance topics and PDF/JS page extraction. Free keys at tavily.com.",
+      "sensitive": true,
+      "required": false
+    },
+    "exa_api_keys": {
+      "type": "string",
+      "title": "Exa API keys",
+      "description": "Optional. One or more Exa keys, comma separated — rotated automatically. Leave empty to use Exa keyless (anonymous, lower limits).",
+      "sensitive": true,
+      "required": false
+    },
+    "search_provider": {
+      "type": "string",
+      "title": "Default search provider",
+      "description": "auto (Exa first, Tavily fallback), exa, tavily, or both (merge results from both; uses credits on both).",
+      "default": "auto",
+      "required": false
+    }
   }
 }

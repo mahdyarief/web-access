@@ -2,14 +2,16 @@
  * Exa API Key Rotator — round-robin over keys.
  *
  * Key sources (first non-empty wins):
- *   1. Unified config ~/.openclaude/web-access.json → "exa"  (see config.js)
- *   2. Legacy file: EXA_KEYS_FILE env or ~/.openclaude/exa_keys.json
+ *   1. EXA_API_KEYS / EXA_API_KEY env — set by the Claude Code plugin's
+ *      "exa_api_keys" option, or manually (comma separated)
+ *   2. Unified config ~/.openclaude/web-access.json → "exa"  (see config.js)
+ *   3. Legacy file: EXA_KEYS_FILE env or ~/.openclaude/exa_keys.json
  */
 
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const { getProviderKeys } = require("./config");
+const { getProviderKeys, envKeys } = require("./config");
 const { isCooling } = require("./key-health");
 
 // Default keys file location
@@ -17,16 +19,26 @@ const DEFAULT_KEYS_FILE = path.join(os.homedir(), ".openclaude", "exa_keys.json"
 
 let _index = 0;
 let _warned = false;
+let _source = "none";
 
 function loadKeys(keysFile = null) {
   if (!keysFile) {
+    const fromEnv = [...new Set(envKeys("EXA_API_KEYS", "EXA_API_KEY"))];
+    if (fromEnv.length) {
+      _source = "env / plugin settings";
+      return fromEnv;
+    }
     const fromConfig = [...new Set(
       getProviderKeys("exa").filter((k) => typeof k === "string" && k.trim()).map((k) => k.trim())
     )];
-    if (fromConfig.length) return fromConfig;
+    if (fromConfig.length) {
+      _source = "config file";
+      return fromConfig;
+    }
   }
 
   const filePath = keysFile || process.env.EXA_KEYS_FILE || DEFAULT_KEYS_FILE;
+  _source = "legacy key file";
 
   try {
     if (!fs.existsSync(filePath)) {
@@ -82,4 +94,9 @@ function hasKeys(keysFile = null) {
   return loadKeys(keysFile).length > 0;
 }
 
-module.exports = { loadKeys, keysInRotationOrder, hasKeys };
+/** Where the currently loaded keys came from (for web_access_status). */
+function keySource() {
+  return loadKeys().length ? _source : "none";
+}
+
+module.exports = { loadKeys, keysInRotationOrder, hasKeys, keySource };

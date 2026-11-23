@@ -2,7 +2,8 @@
  * Tavily API Key Rotator — load keys from a JSON file (or env), round-robin.
  *
  * Key sources (first non-empty wins):
- *   1. TAVILY_API_KEYS env  — comma/space/newline separated list
+ *   1. TAVILY_API_KEYS env  — comma separated; set by the Claude Code plugin's
+ *      "tavily_api_keys" option, or manually
  *   2. TAVILY_API_KEY env   — single key
  *   3. Unified config ~/.openclaude/web-access.json → "tavily"  (see config.js)
  *   4. Legacy file: TAVILY_KEYS_FILE env or ~/.openclaude/tavily_keys.json
@@ -16,7 +17,7 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const { getProviderKeys } = require("./config");
+const { getProviderKeys, envKeys } = require("./config");
 const { isCooling } = require("./key-health");
 
 const DEFAULT_KEYS_FILE = path.join(os.homedir(), ".openclaude", "tavily_keys.json");
@@ -24,6 +25,7 @@ const KEY_PATTERN = /^tvly-[A-Za-z0-9_-]+$/;
 
 let _index = 0;
 let _warned = false;
+let _source = "none";
 
 function cleanKeys(list) {
   const seen = new Set();
@@ -34,22 +36,21 @@ function cleanKeys(list) {
 }
 
 function loadKeys(keysFile = null) {
-  const fromEnvList = process.env.TAVILY_API_KEYS;
-  if (fromEnvList) {
-    const keys = cleanKeys(fromEnvList.split(/[\s,]+/));
-    if (keys.length) return keys;
-  }
-  if (process.env.TAVILY_API_KEY) {
-    const keys = cleanKeys([process.env.TAVILY_API_KEY]);
-    if (keys.length) return keys;
-  }
-
   if (!keysFile) {
+    const fromEnv = cleanKeys(envKeys("TAVILY_API_KEYS", "TAVILY_API_KEY"));
+    if (fromEnv.length) {
+      _source = "env / plugin settings";
+      return fromEnv;
+    }
     const fromConfig = cleanKeys(getProviderKeys("tavily"));
-    if (fromConfig.length) return fromConfig;
+    if (fromConfig.length) {
+      _source = "config file";
+      return fromConfig;
+    }
   }
 
   const filePath = keysFile || process.env.TAVILY_KEYS_FILE || DEFAULT_KEYS_FILE;
+  _source = "legacy key file";
   try {
     if (!fs.existsSync(filePath)) {
       if (!_warned) {
@@ -93,4 +94,8 @@ function hasKeys(keysFile = null) {
   return loadKeys(keysFile).length > 0;
 }
 
-module.exports = { loadKeys, keysInRotationOrder, hasKeys };
+function keySource() {
+  return loadKeys().length ? _source : "none";
+}
+
+module.exports = { loadKeys, keysInRotationOrder, hasKeys, keySource };

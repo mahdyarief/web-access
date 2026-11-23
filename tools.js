@@ -14,8 +14,12 @@ const {
   formatTavilySearch,
   formatTavilyExtract,
 } = require("./tavily-client.js");
-const { hasKeys: hasTavilyKeys, loadKeys: loadTavilyKeys } = require("./tavily-rotator.js");
-const { loadKeys: loadExaKeys } = require("./exa-rotator.js");
+const {
+  hasKeys: hasTavilyKeys,
+  loadKeys: loadTavilyKeys,
+  keySource: tavilyKeySource,
+} = require("./tavily-rotator.js");
+const { loadKeys: loadExaKeys, keySource: exaKeySource } = require("./exa-rotator.js");
 const { describeKeys } = require("./key-health.js");
 const cache = require("./cache.js");
 
@@ -130,7 +134,7 @@ const TOOLS = [
   {
     name: "web_search_tavily",
     description:
-      "Search the web using Tavily (with API key rotation). Requires a Tavily API key (tvly-...) in ~/.openclaude/web-access.json; for keyless search use web_search. Supports domain filter, time range, news/finance topics, advanced depth, and an optional AI-generated answer summary.",
+      "Search the web using Tavily (with API key rotation). Requires a Tavily API key (tvly-...) — set it in the plugin settings or ~/.openclaude/web-access.json; for keyless search use web_search. Supports domain filter, time range, news/finance topics, advanced depth, and an optional AI-generated answer summary.",
     inputSchema: {
       type: "object",
       properties: {
@@ -420,13 +424,17 @@ function handleStatus() {
     `**Config file:** \`${configPath()}\``,
     `**Default provider:** ${getDefaultProvider()}`,
     "",
-    `**Exa:** ${exaKeys.length ? `${exaKeys.length} key(s)` : "keyless (anonymous)"}` +
+    `**Exa:** ${exaKeys.length ? `${exaKeys.length} key(s) from ${exaKeySource()}` : "keyless (anonymous)"}` +
       (exaKeys.length ? ` · keyless fallback ${cfg?.exa?.keylessFallback === false ? "off" : "on"}` : ""),
   ];
   if (exaKeys.length) lines.push(fmtRows(describeKeys("exa", exaKeys)));
   lines.push(
     "",
-    `**Tavily:** ${tavilyKeys.length ? `${tavilyKeys.length} key(s)` : "disabled — requires an API key (tvly-...)"}`
+    `**Tavily:** ${
+      tavilyKeys.length
+        ? `${tavilyKeys.length} key(s) from ${tavilyKeySource()}`
+        : "disabled — requires an API key (tvly-...); add one with /web-access:setup"
+    }`
   );
   if (tavilyKeys.length) lines.push(fmtRows(describeKeys("tavily", tavilyKeys)));
   lines.push(

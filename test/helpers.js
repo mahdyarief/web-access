@@ -17,9 +17,13 @@ const ENV_KEYS = [
   "EXA_API_KEYS",
   "WEB_SEARCH_PROVIDER",
   "WEB_ACCESS_STATE_FILE",
+  "WEB_ACCESS_CACHE_FILE",
 ];
 
 const realFetch = global.fetch;
+// Direct page fetches go through (mocked) global fetch instead of the pinned
+// node:http transport; the pinned transport has its own tests against a local server.
+process.env.WEB_ACCESS_DIRECT_TRANSPORT = "fetch";
 
 /**
  * Load the project with a given config and a fetch handler.
@@ -47,6 +51,7 @@ function setup(config = {}, handler = () => ok({})) {
       provider: String(url).includes("exa.ai") ? "exa" : String(url).includes("tavily") ? "tavily" : "web",
       auth: init.headers?.Authorization?.replace(/^Bearer /, "") || init.headers?.["x-api-key"] || null,
       rest: String(url).includes("api.exa.ai"),
+      headers: init.headers || {},
       body: init.body ? JSON.parse(init.body) : null,
       signal: init.signal,
     };

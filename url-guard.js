@@ -7,8 +7,9 @@
  * Set "fetch": { "allowPrivateNetwork": true } in web-access.json to allow them
  * (e.g. to read docs served from localhost during development).
  *
- * Note: resolution is checked before connecting; a DNS-rebinding attacker could
- * still race it. This guard reduces risk, it is not a network sandbox.
+ * Two layers: assertPublicUrl() checks the URL (and its DNS answers) before
+ * every hop, and pinnedLookup() re-checks the address the socket actually
+ * connects to, so a DNS-rebinding answer cannot slip through in between.
  */
 
 const dns = require("dns").promises;
@@ -97,4 +98,36 @@ async function assertPublicUrl(rawUrl, { allowPrivate = false } = {}) {
   return u;
 }
 
-module.exports = { assertPublicUrl, isPrivateIp, BlockedUrlError };
+/**
+ * A socket `lookup` function that refuses private addresses at connect time.
+ * Used by the pinned transport: the IP that passes this check is exactly the
+ * IP the socket connects to, which closes the DNS-rebinding window between
+ * assertPublicUrl() and the actual connection.
+ */
+function pinnedLookup(allowPrivate) {
+  const dnsCb = require("dns");
+  return (hostname, options, callback) => {
+    if (typeof options === "function") {
+      callback = options;
+      options = {};
+    }
+    const opts = typeof options === "number" ? { family: options } : options || {};
+    dnsCb.lookup(hostname, { ...opts, all: true }, (err, addrs) => {
+      if (err) return callback(err);
+      if (!allowPrivate) {
+        const bad = addrs.find((a) => isPrivateIp(a.address));
+        if (bad) {
+          return callback(
+            new BlockedUrlError(
+              `refusing to fetch internal address ${hostname} — it resolves to private IP ${bad.address} (set fetch.allowPrivateNetwork to allow)`
+            )
+          );
+        }
+      }
+      if (opts.all) callback(null, addrs);
+      else callback(null, addrs[0].address, addrs[0].family);
+    });
+  };
+}
+
+module.exports = { assertPublicUrl, isPrivateIp, pinnedLookup, BlockedUrlError };

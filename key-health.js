@@ -81,21 +81,47 @@ function sync() {
   _loadedMtime = mtime;
 }
 
+/** Read the whole state file (other sections such as "spend" included). */
+function readStateFile() {
+  const file = stateFile();
+  if (!file) return null;
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf-8")) || {};
+  } catch {
+    return {};
+  }
+}
+
+/** Atomically rewrite the state file with mutate(data); keeps other sections. */
+function updateStateFile(mutate) {
+  const file = stateFile();
+  if (!file) return false;
+  try {
+    const data = readStateFile() || {};
+    mutate(data);
+    data.version = 1;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+    fs.renameSync(tmp, file);
+    return true;
+  } catch (err) {
+    console.error(`[web-access] Could not save state to ${file}: ${err.message}`);
+    return false;
+  }
+}
+
 function persist() {
   const file = stateFile();
   if (!file) return;
-  try {
-    const now = Date.now();
-    const cooldowns = {};
-    for (const [k, v] of _state) if (v.until > now) cooldowns[k] = v;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ version: 1, cooldowns }, null, 2));
-    fs.renameSync(tmp, file);
-    _loadedFrom = file;
-    _loadedMtime = fs.statSync(file).mtimeMs;
-  } catch (err) {
-    console.error(`[key-health] Could not save state to ${file}: ${err.message}`);
+  const now = Date.now();
+  const cooldowns = {};
+  for (const [k, v] of _state) if (v.until > now) cooldowns[k] = v;
+  if (updateStateFile((data) => (data.cooldowns = cooldowns))) {
+    try {
+      _loadedFrom = file;
+      _loadedMtime = fs.statSync(file).mtimeMs;
+    } catch {}
   }
 }
 
@@ -173,4 +199,6 @@ module.exports = {
   maskKey,
   reset,
   stateFile,
+  readStateFile,
+  updateStateFile,
 };

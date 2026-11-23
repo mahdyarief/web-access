@@ -10,3 +10,5 @@ tavily_keys.json
 .env
 .env.*
 .ignore
+web-access-cache.json
+web-access-state.json

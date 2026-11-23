@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.6.0 — 2026-11-24
+
+### Added
+- **Markdown page reading.** A new zero-dependency HTML parser and renderer (`html-markdown.js`) keeps links (absolute), tables, fenced code blocks with their language, nested lists, blockquotes and emphasis.
+- **Better boilerplate removal.** Cookie and consent banners, ads, share buttons, hidden elements, edit links, citation markers, permalink anchors and Wikipedia's language list are dropped. Copy buttons and labels no longer leak into code blocks.
+- **`web_get_contents` additions:**
+  - `find` returns only the sections that mention a term, with offsets and headings.
+  - `urls` reads up to 10 pages in parallel.
+  - `format: "text"` drops link URLs to save tokens.
+- **`web_search` additions:**
+  - `queries` runs up to 5 queries in parallel and merges them with rank fusion. Results are labelled with the queries that found them.
+  - `excludeSite`, `startDate` and `endDate` filters, sent natively to Exa REST and Tavily, and as query hints for keyless Exa. `site` accepts several domains.
+  - `maxPerDomain` (default 3) keeps one domain from filling the results.
+- **`github_read`** reads a repository's README, a file or a folder. It accepts `owner/repo` or any github.com URL, plus `find`/`offset`.
+- **Exa `/contents` fallback** for PDFs and JS-rendered pages when an Exa key is configured.
+- **Daily budgets** (`tavily.dailyCreditBudget`, `exa.dailyBudgetUsd`), counted from the credits and costs the APIs actually report (`include_usage`, `costDollars`). Spend is stored in the state file and shown in `web_access_status`.
+- **Tavily keyless mode** (opt-in, `tavily.keyless`) for search and extract.
+- **In-flight sharing.** Identical concurrent requests share one upstream call.
+- **Optional persistent cache** (`cachePersist`, `web-access-cache.json`).
+- **MCP tool annotations** (`readOnlyHint`, `openWorldHint`, titles) on every tool.
+- **`/web-access:research` skill** for multi-step, source-backed research with citations.
+
+### Changed
+- **DNS-rebinding protection.** Direct fetches use a pinned transport (`node:http`/`https`), and the socket's DNS lookup refuses private addresses. Responses are decoded from gzip, deflate or brotli.
+- **Dates** from Tavily (RFC format) are normalised to `YYYY-MM-DD`.
+- **Crawl output.** `web_crawl` removes lines repeated across most pages, such as site banners and doc indexes.
+
 ## 1.5.1 — 2026-11-23
 
 ### Changed

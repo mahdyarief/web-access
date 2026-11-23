@@ -1,14 +1,14 @@
 {
   "name": "web-access",
-  "version": "1.5.1",
-  "description": "Local MCP server for web search (Exa + Tavily with API key rotation), URL content extraction and GitHub search. Zero dependencies.",
+  "version": "1.6.0",
+  "description": "Local MCP server for web search (Exa + Tavily with API key rotation), web pages as Markdown, site crawl, GitHub search/read and daily budgets. Zero dependencies.",
   "main": "server.js",
   "bin": {
     "web-access": "server.js"
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/providers.test.js test/content.test.js test/hardening.test.js test/features.test.js"
+    "test": "node --test test/providers.test.js test/content.test.js test/hardening.test.js test/features.test.js test/enhance.test.js"
   },
   "engines": {
     "node": ">=18.17"

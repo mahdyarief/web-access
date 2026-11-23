@@ -1,9 +1,33 @@
 const { keysInRotationOrder, hasKeys } = require("./tavily-rotator");
 const { loadConfig } = require("./config");
 const { markFailure, markSuccess, shouldRotate } = require("./key-health");
-const { formatItems } = require("./formatter");
+const { formatItems, toList } = require("./formatter");
+const budget = require("./budget");
 
 const TAVILY_API = "https://api.tavily.com";
+// Endpoints Tavily serves in keyless mode (opt-in: "tavily": { "keyless": true }).
+const KEYLESS_ENDPOINTS = new Set(["/search", "/extract"]);
+
+function keylessEnabled() {
+  return loadConfig()?.tavily?.keyless === true;
+}
+
+/** Can this Tavily endpoint be used right now (keys, or opt-in keyless mode)? */
+function tavilyAvailable(endpoint = "/search") {
+  return hasKeys() || (keylessEnabled() && KEYLESS_ENDPOINTS.has(endpoint));
+}
+
+/** Credits for a call: what Tavily reports (include_usage), else an estimate. */
+function creditsUsed(endpoint, payload, data) {
+  const reported = Number(data?.usage?.credits);
+  if (Number.isFinite(reported)) return reported;
+  const adv = payload.search_depth === "advanced" || payload.extract_depth === "advanced" ? 2 : 1;
+  const n = (data?.results || []).length;
+  if (endpoint === "/search") return adv;
+  if (endpoint === "/extract") return Math.ceil(n / 5) * adv;
+  const map = Math.ceil(n / 10) * (payload.instructions ? 2 : 1);
+  return endpoint === "/crawl" ? map + Math.ceil(n / 5) * adv : map;
+}
 const DEFAULT_DEADLINE_MS = 45000; // total budget across all keys
 const MAX_ATTEMPT_MS = 30000;
 
@@ -11,37 +35,51 @@ class RetryableError extends Error {}
 
 /**
  * POST to a Tavily endpoint, rotating through healthy keys.
- * Tavily has no keyless mode — at least one key (tvly-...) is required.
+ * Without keys, only the opt-in keyless mode ("tavily": { "keyless": true })
+ * is available, for /search and /extract.
  * Key/quota errors put the key on cooldown and try the next one; 5xx and
  * network errors try the next key; anything else fails fast.
  */
 async function callTavily(endpoint, payload, { deadlineMs } = {}) {
-  if (!hasKeys()) {
+  const keyless = !hasKeys() && keylessEnabled() && KEYLESS_ENDPOINTS.has(endpoint);
+  if (!hasKeys() && !keyless) {
     throw new Error(
       "No Tavily API keys configured. Run /plugin configure web-access@mahdyarief " +
         '(or add {"tavily": {"keys": ["tvly-..."]}} to ~/.openclaude/web-access.json, or set TAVILY_API_KEYS).'
     );
   }
+  budget.assertBudget("tavily");
+  payload = { ...payload, include_usage: true };
+
+  if (keyless) {
+    const cfgTimeout = Number(loadConfig()?.tavily?.timeoutMs);
+    const t = deadlineMs || (cfgTimeout > 0 ? cfgTimeout : DEFAULT_DEADLINE_MS);
+    const data = await attemptOnce(endpoint, payload, null, t);
+    budget.record("tavily", creditsUsed(endpoint, payload, data));
+    return data;
+  }
+
   const keys = keysInRotationOrder();
   if (keys.length === 0) {
     throw new Error("All Tavily keys are cooling down (rate-limited or out of credits).");
   }
 
   const cfgTimeout = Number(loadConfig()?.tavily?.timeoutMs);
-  const budget = deadlineMs || (cfgTimeout > 0 ? cfgTimeout : DEFAULT_DEADLINE_MS);
-  const deadline = Date.now() + budget;
+  const total = deadlineMs || (cfgTimeout > 0 ? cfgTimeout : DEFAULT_DEADLINE_MS);
+  const deadline = Date.now() + total;
   let lastError = null;
 
   for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
     const remaining = deadline - Date.now();
     if (remaining < 1000) {
-      lastError = new Error(`Tavily request timed out after ${budget}ms (${i} attempt(s))`);
+      lastError = new Error(`Tavily request timed out after ${total}ms (${i} attempt(s))`);
       break;
     }
     try {
-      const data = await attemptOnce(endpoint, payload, key, Math.min(remaining, Math.max(MAX_ATTEMPT_MS, budget / 2)));
+      const data = await attemptOnce(endpoint, payload, key, Math.min(remaining, Math.max(MAX_ATTEMPT_MS, total / 2)));
       markSuccess("tavily", key);
+      budget.record("tavily", creditsUsed(endpoint, payload, data));
       return data;
     } catch (err) {
       if (!(err instanceof RetryableError)) throw err;
@@ -57,7 +95,9 @@ async function attemptOnce(endpoint, payload, key, timeoutMs) {
   try {
     response = await fetch(`${TAVILY_API}${endpoint}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      headers: key
+        ? { "Content-Type": "application/json", Authorization: `Bearer ${key}` }
+        : { "Content-Type": "application/json", "X-Tavily-Access-Mode": "keyless" },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -67,9 +107,12 @@ async function attemptOnce(endpoint, payload, key, timeoutMs) {
 
   if (!response.ok) {
     const msg = `Tavily error ${response.status}: ${(await response.text()).slice(0, 300)}`;
-    if (shouldRotate(response.status)) {
+    if (key && shouldRotate(response.status)) {
       markFailure("tavily", key, response.status, { retryAfter: response.headers?.get?.("retry-after") });
       throw new RetryableError(msg);
+    }
+    if (!key && (response.status === 429 || response.status === 402 || response.status === 432)) {
+      throw new Error(`${msg} — Tavily keyless mode is rate-limited per IP; add a Tavily key for reliable access.`);
     }
     if (response.status >= 500) throw new RetryableError(msg);
     throw new Error(msg);
@@ -94,8 +137,16 @@ async function tavilySearch(opts) {
     include_raw_content: opts.includeRawContent ?? false,
     include_published_date: true,
   };
-  if (opts.site) payload.include_domains = [opts.site];
-  if (opts.recency) payload.time_range = opts.recency;
+  const include = toList(opts.site);
+  const exclude = toList(opts.excludeSite);
+  if (include.length) payload.include_domains = include;
+  if (exclude.length) payload.exclude_domains = exclude;
+  if (opts.startDate || opts.endDate) {
+    if (opts.startDate) payload.start_date = String(opts.startDate).trim();
+    if (opts.endDate) payload.end_date = String(opts.endDate).trim();
+  } else if (opts.recency) {
+    payload.time_range = opts.recency;
+  }
 
   return callTavily("/search", payload);
 }
@@ -223,4 +274,6 @@ module.exports = {
   tavilyMap,
   tavilyCrawl,
   tavilyUsage,
+  tavilyAvailable,
+  keylessEnabled,
 };

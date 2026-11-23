@@ -13,7 +13,8 @@
 const { keysInRotationOrder, hasKeys } = require("./exa-rotator");
 const { loadConfig } = require("./config");
 const { markFailure, markSuccess, shouldRotate } = require("./key-health");
-const { parseExaResults, recencyToDate, snippetLimit, buildSearchQuery } = require("./formatter");
+const { parseExaResults, recencyToDate, snippetLimit, buildSearchQuery, toList, isoDate } = require("./formatter");
+const budget = require("./budget");
 
 const EXA_API = "https://api.exa.ai";
 const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
@@ -117,6 +118,7 @@ async function httpError(response, key) {
 // ── REST (keyed) ─────────────────────────────────────────────
 
 async function restPost(endpoint, body, key, timeoutMs) {
+  budget.assertBudget("exa");
   let response;
   try {
     response = await fetch(`${EXA_API}${endpoint}`, {
@@ -134,6 +136,7 @@ async function restPost(endpoint, body, key, timeoutMs) {
   if (Number.isFinite(cost)) {
     _spend.total += cost;
     _spend.requests += 1;
+    budget.record("exa", cost);
   }
   return data;
 }
@@ -146,9 +149,13 @@ function restSearchBody(opts) {
     contents: { highlights: { maxCharacters: opts.snippetChars } },
   };
   if (opts.category) body.category = opts.category;
-  if (opts.site) body.includeDomains = [opts.site];
-  const since = recencyToDate(opts.recency);
+  const include = toList(opts.site);
+  const exclude = toList(opts.excludeSite);
+  if (include.length) body.includeDomains = include;
+  if (exclude.length) body.excludeDomains = exclude;
+  const since = opts.startDate ? isoDate(opts.startDate) : recencyToDate(opts.recency);
   if (since) body.startPublishedDate = since;
+  if (opts.endDate) body.endPublishedDate = isoDate(opts.endDate, true);
   // livecrawl (deprecated by Exa) → maxAgeHours
   if (opts.livecrawl === "always") body.contents.maxAgeHours = 0;
   else if (opts.livecrawl === "never") body.contents.maxAgeHours = -1;
@@ -258,6 +265,26 @@ async function exaAnswer(query) {
   );
 }
 
+/**
+ * Exa /contents for one URL (requires a key): clean page text, including PDFs
+ * and JS-rendered pages. Returns { title, text }.
+ */
+async function exaContents(url) {
+  return withRotation(
+    async (key, t) => {
+      const data = await restPost("/contents", { urls: [url], text: true }, key, t);
+      const r = data?.results?.[0];
+      if (!r?.text || !r.text.trim()) {
+        const st = (data?.statuses || []).find((s) => s.id === url) || data?.statuses?.[0];
+        const why = st?.error?.tag || st?.error?.httpStatusCode || st?.status || "no content";
+        throw new Error(`Exa could not read the page (${why})`);
+      }
+      return { title: r.title || "", text: r.text.trim() };
+    },
+    { allowKeyless: false }
+  );
+}
+
 function tryParseSse(body) {
   for (const line of body.split("\n").filter((l) => l.startsWith("data:"))) {
     const payload = line.slice(5).trim();
@@ -278,4 +305,4 @@ function tryParseJson(body) {
   return null;
 }
 
-module.exports = { exaSearch, exaAnswer, exaSpend, callExaMcp, EXA_CATEGORIES, EXA_TYPES };
+module.exports = { exaSearch, exaAnswer, exaContents, exaSpend, callExaMcp, EXA_CATEGORIES, EXA_TYPES };

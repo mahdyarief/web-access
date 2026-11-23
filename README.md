@@ -6,11 +6,11 @@
 
 A zero-dependency local [MCP](https://modelcontextprotocol.io) server, packaged as a Claude Code plugin, that gives AI coding agents web access through **[Exa](https://exa.ai) and [Tavily](https://tavily.com)**:
 
-- **Web search**: one provider, automatic fallback, or both merged with rank fusion. Supports domain, date and category filters, AI answers and compact snippets.
-- **API key rotation** for both providers, with persistent cooldowns for exhausted, rate-limited or invalid keys
-- **Reading the web**: a direct page fetch with paging for long pages, Tavily Extract for PDFs and JS-rendered pages, and Tavily Map/Crawl for whole sites
-- **Safe by default**: internal and private network addresses are refused, downloads are size-capped, and no telemetry is sent
-- **GitHub search** for repositories, code, issues, commits and topics
+- **Web search**: one provider, automatic fallback, or both merged with rank fusion. Supports several queries per call, domain include/exclude, date ranges and categories, AI answers, compact snippets and a per-domain cap.
+- **API key rotation** for both providers, with persistent cooldowns for exhausted, rate-limited or invalid keys, plus optional **daily budgets**
+- **Reading the web as Markdown**: links, tables and code blocks are kept. You can `find` the relevant part of a long page, read several URLs at once, and fall back to Tavily Extract or Exa for PDFs and JS-rendered pages. Tavily Map/Crawl cover whole sites.
+- **Safe by default**: internal and private network addresses are refused, including against DNS rebinding. Downloads are size-capped and no telemetry is sent.
+- **GitHub**: search repositories, code, issues, commits and topics, and read a repo's README, files or folders
 
 It works out of the box, because Exa is used **keyless** when no key is configured. Keys unlock more:
 
@@ -20,8 +20,9 @@ It works out of the box, because Exa is used **keyless** when no key is configur
 | Fallback between providers | — | — | ✅ |
 | `provider: "both"` (merged) | Exa only | Exa only | ✅ Exa + Tavily |
 | AI answer (`includeAnswer`) | — | ✅ Exa `/answer` | ✅ Tavily answer |
-| `web_get_contents` | ✅ HTML/text | ✅ | ✅ plus PDFs and JS pages |
+| `web_get_contents` | ✅ HTML → Markdown | ✅ plus PDFs and JS pages (Exa contents) | ✅ plus PDFs and JS pages (Tavily Extract) |
 | `web_extract_tavily`, `web_map`, `web_crawl` | — | — | ✅ |
+| `github_search`, `github_read` | ✅ | ✅ | ✅ |
 
 ## Contents
 
@@ -87,6 +88,7 @@ The plugin bundles:
 |---|---|---|
 | MCP server | `web-access` | The tools below, exposed as `mcp__plugin_web-access_web-access__<tool>`. |
 | Skill | `web-research` | Teaches Claude which tool and mode to use for each kind of question. |
+| Skill | `/web-access:research <question>` | Step-by-step, source-backed research: sub-questions, multi-query search, reading the best sources, cross-checking, and an answer with citations. |
 | Skill | `/web-access:setup` | Guided key setup, a status check and diagnosis. |
 
 ### Any other MCP client
@@ -119,11 +121,13 @@ You can leave `env` out and use the [config file](#configuration) instead.
 After installing, just ask Claude:
 
 - *"What changed in the latest Node.js release?"* → `web_search` with `recency`
-- *"Read https://example.com/docs/api and summarize the auth section"* → `web_get_contents`, paging with `offset` if the page is long
+- *"Read https://example.com/docs/api and summarize the auth section"* → `web_get_contents` with `find: "auth"`
+- *"Compare these three pricing pages"* → `web_get_contents` with `urls: [...]`
 - *"Which pages does docs.tavily.com have about the API?"* → `web_map`
 - *"Read all the API reference pages of this docs site"* → `web_crawl` with `selectPaths`
-- *"Find popular MCP server repos written in TypeScript"* → `github_search`
-- *"Research Bun vs Deno, give me a short answer and cite sources"* → `web_search` with `provider: "both"` and `includeAnswer: true`
+- *"Find popular MCP server repos written in TypeScript and show me the best one's README"* → `github_search`, then `github_read`
+- *"Research Bun vs Deno, give me a short answer and cite sources"* → `web_search` with `queries: [...]`, `provider: "both"` and `includeAnswer: true`
+- `/web-access:research Is Bun production-ready in 2026?` → the full research workflow, with citations
 
 To check the setup, run `/web-access:setup` or ask *"run web_access_status"*:
 
@@ -137,13 +141,15 @@ To check the setup, run `/web-access:setup` or ask *"run web_access_status"*:
   - `3f2a91c0…7d1e` — ready
   - `b81e44aa…02cf` — cooling (HTTP 402, 1380 min left)
   - spend this session: $0.0350 over 7 request(s)
+  - today (UTC): $0.0350 over 7 request(s) · budget $1
 
 **Tavily:** 1 key(s) from env / plugin settings
-  - `tvly-13T…bbqN` — ready · credits 150 / 1000 used
+  - `tvly-aaaa…zzzz` — ready · credits 150 / 1000 used
   - account plan: Researcher · plan 150 / 1000 used
+  - today (UTC): 12 credits over 9 request(s) · budget 100 credits
 
-**Cooldown state:** `~/.openclaude/web-access-state.json`
-**Cache:** 5 entries, TTL 600s, 3 hit(s) / 5 miss(es)
+**State file (cooldowns, daily spend):** `~/.openclaude/web-access-state.json`
+**Cache:** 5 entries, TTL 600s, 3 hit(s) / 5 miss(es), 1 duplicate in-flight call(s) shared
 ```
 
 Example `web_search` result with `provider: "both"` and `includeAnswer: true`:
@@ -171,14 +177,18 @@ Searches the web with the configured provider strategy.
 
 | Parameter | Type | Default | Notes |
 |---|---|---|---|
-| `query` | string | **required** | Be specific: include product names, versions or error text. |
-| `numResults` | number | `5` | 1–10. In `both` mode, up to 2× after deduplication. |
-| `site` | string | | Limits results to one domain, e.g. `docs.python.org`. |
+| `query` | string | `query` or `queries` | Be specific: include product names, versions or error text. |
+| `queries` | string[] | | Up to 5 queries run in parallel and merged with rank fusion. Each result is labelled with the queries that found it (`query 1, 3`). Use it to research a topic from several angles in one call. |
+| `numResults` | number | `5` | 1–10 per query. In `both` mode, up to 2× after deduplication. |
+| `site` | string | | Limits results to these domains, e.g. `docs.python.org` or `a.com,b.org`. |
+| `excludeSite` | string[] | | Domains to leave out, e.g. `["pinterest.com"]`. |
 | `recency` | `day` \| `week` \| `month` \| `year` | | Only results published in that period. |
-| `category` | `news` \| `publication` \| `company` \| `personal site` \| `financial report` \| `people` | | Exa category. Mapped to a Tavily topic on fallback (`news` → news, `financial report` → finance). With `company`/`people`, Exa ignores `site` and `recency`. |
+| `startDate` / `endDate` | `YYYY-MM-DD` | | Explicit date range. `startDate` overrides `recency`. |
+| `category` | `news` \| `publication` \| `company` \| `personal site` \| `financial report` \| `people` | | Exa category. Mapped to a Tavily topic on fallback (`news` → news, `financial report` → finance). With `company`/`people`, Exa ignores the site and date filters. |
 | `provider` | `auto` \| `exa` \| `tavily` \| `both` | config, else `auto` | See [provider modes](#provider-modes). |
-| `includeAnswer` | boolean | `false` | Adds an AI answer: the Tavily answer and/or Exa `/answer` (each needs a key). `both` shows both answers for cross-checking. |
+| `includeAnswer` | boolean | `false` | Adds an AI answer: the Tavily answer and/or Exa `/answer` (each needs a key). `both` shows both answers for cross-checking. With several queries, each answer is labelled with its query. |
 | `maxCharsPerResult` | number | `1200` | Snippet length per result (100–10000). |
+| `maxPerDomain` | number | `3` | At most this many results from one domain, so one site can't fill the list. `0` = unlimited. Not applied when `site` is set. |
 | `livecrawl` | `always` \| `fallback` \| `never` | `fallback` | Exa freshness (`always` = fetch live, which also skips the cache). |
 | `fresh` | boolean | `false` | Skips the result cache. |
 
@@ -190,7 +200,7 @@ Exa only. Without a key it uses Exa's anonymous MCP endpoint. With keys it uses 
 |---|---|---|---|
 | `query` | string | **required** | |
 | `numResults` | number | `5` | 1–10 |
-| `site`, `recency`, `category` | | | As in `web_search`. Native with a key; added to the query text as hints when keyless. |
+| `site`, `excludeSite`, `recency`, `startDate`, `endDate`, `category`, `maxPerDomain` | | | As in `web_search`. Filters are native with a key, and added to the query text as hints (`site:`, `-site:`, `after:`, `before:`) when keyless. |
 | `type` | `auto` \| `lite` \| `deep` | `auto` | `lite` is fastest, `deep` is the most thorough (needs a key). The legacy values `neural`/`keyword` are treated as `auto`. |
 | `maxCharsPerResult` | number | `1200` | Sent to Exa as the highlights budget, so snippets are compact at the source. |
 | `livecrawl` | `always` \| `fallback` \| `never` | `fallback` | Mapped to Exa `maxAgeHours` (`0` / default / `-1`). |
@@ -204,7 +214,7 @@ Tavily only. **Requires a Tavily key.**
 |---|---|---|---|
 | `query` | string | **required** | |
 | `numResults` | number | `5` | 1–20 |
-| `site`, `recency` | | | Sent as Tavily `include_domains` and `time_range`. |
+| `site`, `excludeSite`, `recency`, `startDate`, `endDate`, `maxPerDomain` | | | Sent as Tavily `include_domains`, `exclude_domains`, `time_range` and `start_date`/`end_date`. |
 | `topic` | `general` \| `news` \| `finance` | `general` | |
 | `searchDepth` | `basic` \| `advanced` | `basic` | `advanced` gives better relevance and costs 2 credits. |
 | `includeAnswer` | boolean | `false` | Adds a short AI answer. |
@@ -213,14 +223,17 @@ Tavily only. **Requires a Tavily key.**
 
 ### `web_get_contents`
 
-Returns the readable content of one URL. Works without any key. See [reading pages](#reading-pages).
+Returns the content of web pages as **Markdown**: headings, links, tables, lists and fenced code blocks with their language. Works without any key. See [reading pages](#reading-pages).
 
 | Parameter | Type | Default | Notes |
 |---|---|---|---|
-| `url` | string | **required** | `http://` or `https://`. Internal addresses are refused. |
-| `maxChars` | number | `8000` | Characters returned per call (500–50000). |
+| `url` | string | `url` or `urls` | `http://` or `https://`. Internal addresses are refused. |
+| `urls` | string[] | | Up to 10 URLs read in parallel. A failed URL is listed under `## Failed:` without failing the rest. |
+| `find` | string | | Returns only the sections that mention this text (exact phrase first, then its words). Each hit shows its `offset` and the heading it sits under. Ideal for long pages. |
+| `format` | `markdown` \| `text` | `markdown` | `text` reduces links to their text, which saves tokens. |
+| `maxChars` | number | `8000` | Characters returned per page (500–50000). With several URLs the default is ~24000 split across them. |
 | `offset` | number | `0` | Continues a long page. Each truncated result ends with `call again with offset=N`. |
-| `fresh` | boolean | `false` | Re-downloads the page. Otherwise the document is cached, so paging does not re-fetch it. |
+| `fresh` | boolean | `false` | Re-downloads the page. Otherwise the document is cached, so paging and `find` do not re-fetch it. |
 
 ### `web_extract_tavily`
 
@@ -259,6 +272,8 @@ Crawls a website and returns several pages' content in one call with Tavily Craw
 | `extractDepth` | `basic` \| `advanced` | `basic` | |
 | `maxCharsPerPage` | number | `3000` | Per-page text in the output. Read any page in full with `web_get_contents`. |
 
+Lines repeated on most crawled pages, such as site banners, doc indexes and footers, are removed so `maxCharsPerPage` is spent on real content.
+
 ### `github_search`
 
 Searches GitHub through the REST API.
@@ -273,6 +288,20 @@ Searches GitHub through the REST API.
 
 Authentication is optional and improves rate limits. The token is taken from `GITHUB_TOKEN`, then `GH_TOKEN`, then `gh auth token`.
 
+### `github_read`
+
+Reads from a GitHub repository: its README, a file, or a directory listing.
+
+| Parameter | Type | Default | Notes |
+|---|---|---|---|
+| `repo` | string | **required** | `owner/repo` or any github.com URL, including `blob`/`tree` links such as `https://github.com/o/r/blob/main/src/x.ts`. |
+| `path` | string | | File or folder in the repo. Leave it out to read the README. |
+| `ref` | string | default branch | Branch, tag or commit. |
+| `find` | string | | Returns only the parts of the file that mention this text. |
+| `maxChars` / `offset` | number | `12000` / `0` | Paging for long files. |
+
+Private repositories need `GITHUB_TOKEN` or `gh auth login`. Binary files are not shown. Files over 1 MB are downloaded raw.
+
 ### `web_access_status`
 
 No parameters. Shows:
@@ -280,7 +309,8 @@ No parameters. Shows:
 - key counts and where they came from, with masked keys and their cooldown state
 - **remaining Tavily credits** per key and for the account (from Tavily's `/usage` endpoint, cached for 10 minutes)
 - **Exa spend this session** (summed from Exa's `costDollars`)
-- the cooldown state file and cache stats
+- **today's spend** per provider and the [daily budget](#daily-budgets), if one is set
+- the state file and cache stats
 
 Full keys are never shown.
 
@@ -290,12 +320,14 @@ Full keys are never shown.
 
 | Mode | Behaviour | Best for |
 |---|---|---|
-| `auto` | Exa first, Tavily on error. **Exception:** when Exa has no key and the query uses `site` or `recency`, Tavily goes first, because keyless Exa can only receive those filters as query hints. | Everyday use |
+| `auto` | Exa first, Tavily on error. **Exception:** when Exa has no key and the query uses site or date filters, Tavily goes first, because keyless Exa can only receive those filters as query hints. | Everyday use |
 | `exa` | Exa only. | Saving Tavily credits |
 | `tavily` | Tavily, with Exa on error. Without a Tavily key it uses Exa directly and adds a note. | News, recent events |
 | `both` | Exa and Tavily run in parallel. Results are merged with **Reciprocal Rank Fusion** and deduplicated by normalized URL (ignoring `www.`, trailing `/` and `utm_*`). | Research, thin results, cross-checking |
 
 How the `both` ranking works: each result scores Σ 1/(60 + rank) over the providers that returned it. Hits found by **both** providers therefore rank first and are tagged `via exa + tavily`. Single-provider hits follow, interleaved fairly by rank. If one provider fails, you still get the other's results plus a note.
+
+With **several `queries`**, each query runs with the same strategy in parallel, and the result lists are fused the same way: results found by several queries rank higher. After merging, `maxPerDomain` (default 3) keeps one site from filling the list, and a note says how many results it hid.
 
 ### Exa: REST vs keyless
 
@@ -308,17 +340,25 @@ How the `both` ranking works: each result scores Σ 1/(60 + rank) over the provi
 `web_get_contents` tries the cheapest method that works:
 
 1. **Direct fetch**, which is free.
-   - It refuses internal and private addresses, including on every redirect hop.
+   - It refuses internal and private addresses. The check runs on every redirect hop, and again on the IP the socket actually connects to.
    - It stops downloading after 25 MB.
-   - It decodes the page using its declared charset.
-   - It prefers `<article>`/`<main>` content, drops navigation, header, footer, forms and scripts, and keeps headings and lists.
-2. **Tavily Extract**, used only with a Tavily key, when the direct fetch fails (blocked, timeout, HTTP error), when the URL is a **PDF** or other document, or when the page yields under ~300 characters (usually JS-rendered). Internal URLs are never sent to Tavily.
+   - It decodes gzip/deflate/brotli and the page's declared charset.
+   - It converts HTML to **Markdown** with a built-in parser:
+     - Main content: `<article>` / `<main>` when they hold enough text.
+     - Dropped: navigation, cookie and consent banners, ads, share buttons, hidden elements, edit links, citation markers and permalink anchors.
+     - Kept: headings, absolute links, bold/italic, inline code, fenced code blocks with their language, nested lists, blockquotes and tables.
+2. **Tavily Extract**, used only with a Tavily key, when the direct fetch fails (blocked, timeout, HTTP error), when the URL is a **PDF** or other document, or when the page yields under ~300 characters (usually JS-rendered).
+3. **Exa contents**, used with an Exa key in the same cases, when Tavily is not configured or could not read the page.
 
-The full document is cached, so reading a long page with `offset` costs one download.
+Internal URLs are never sent to a provider. The full document is cached, so paging with `offset` or searching with `find` costs one download.
 
 ### Caching
 
-Successful results are kept in memory for `cacheTtlSeconds` (600 by default) and keyed by tool plus arguments, ignoring argument order and surrounding whitespace. Errors are never cached. `fresh: true` or `livecrawl: "always"` bypasses the cache. Up to 200 entries are kept, and the oldest are evicted first.
+- **What is kept**: successful results, in memory for `cacheTtlSeconds` (600 by default). They are keyed by tool plus arguments, ignoring argument order and surrounding whitespace. Errors are never cached.
+- **Bypassing it**: `fresh: true` or `livecrawl: "always"`.
+- **Size**: up to 200 entries; the oldest are evicted first.
+- **Parallel duplicates**: identical requests that are still running share one upstream call, even with the cache disabled, so they cost once.
+- **Across restarts**: set `"cachePersist": true` to also save results to `web-access-cache.json` next to the config file (or `WEB_ACCESS_CACHE_FILE`) and reuse them in later sessions until they expire. Whole documents and results over 256 KB stay in memory only.
 
 ## Configuration
 
@@ -340,13 +380,17 @@ The default path is `~/.openclaude/web-access.json`. Override it with `WEB_ACCES
 {
   "provider": "auto",
   "cacheTtlSeconds": 600,
+  "cachePersist": false,
   "exa": {
     "keylessFallback": true,
     "timeoutMs": 45000,
+    "dailyBudgetUsd": 1,
     "keys": ["your-exa-key-1", "your-exa-key-2"]
   },
   "tavily": {
     "timeoutMs": 45000,
+    "dailyCreditBudget": 100,
+    "keyless": false,
     "keys": ["tvly-your-key-1", "tvly-your-key-2"]
   },
   "fetch": {
@@ -360,11 +404,15 @@ The default path is `~/.openclaude/web-access.json`. Override it with `WEB_ACCES
 |---|---|---|
 | `provider` | `auto` | Default mode for `web_search`. `WEB_SEARCH_PROVIDER` or the plugin option overrides it. Invalid values fall back to `auto`. |
 | `cacheTtlSeconds` | `600` | Cache lifetime. `0` disables the cache. |
+| `cachePersist` | `false` | Saves results to `web-access-cache.json` next to the config file and reuses them across sessions. |
 | `exa.keys` | `[]` | Exa API keys. With none, Exa runs keyless. |
 | `exa.keylessFallback` | `true` | Makes one keyless attempt when every key is rejected or cooling down. Set it to `false` to fail instead. |
 | `exa.timeoutMs` | `45000` | Total time budget for one Exa request across all attempts. |
-| `tavily.keys` | `[]` | Tavily API keys (`tvly-...`). Tavily is disabled without at least one key. |
+| `exa.dailyBudgetUsd` | none | [Daily budget](#daily-budgets) for keyed Exa calls, in dollars. |
+| `tavily.keys` | `[]` | Tavily API keys (`tvly-...`). Tavily is disabled without at least one key, unless `tavily.keyless` is on. |
 | `tavily.timeoutMs` | `45000` | Time budget for one Tavily search (extract: 90 s, map/crawl: 160 s). |
+| `tavily.dailyCreditBudget` | none | [Daily budget](#daily-budgets) in Tavily credits. |
+| `tavily.keyless` | `false` | Opt-in: use Tavily's keyless mode for search and extract when no key is configured. It is rate-limited per IP with a small daily cap; map and crawl still need a key. |
 | `fetch.allowPrivateNetwork` | `false` | Allows `web_get_contents` to read localhost and private-network URLs, for example local dev docs. |
 | `fetch.maxBytes` | `26214400` | Download cap for direct fetches (25 MB). |
 
@@ -372,7 +420,20 @@ The default path is `~/.openclaude/web-access.json`. Override it with `WEB_ACCES
 
 ### State file
 
-Key cooldowns are saved to **`web-access-state.json` next to the config file** (default `~/.openclaude/web-access-state.json`), so they survive restarts and are shared between concurrent sessions. The file contains only short SHA-256 fingerprints of keys, **never the keys themselves**. It is a plain file, not tied to any MCP client. Use `WEB_ACCESS_STATE_FILE=/path/to/file.json` to move it, or `WEB_ACCESS_STATE_FILE=off` to keep cooldowns in memory only.
+Key cooldowns and today's spend are saved to **`web-access-state.json` next to the config file** (default `~/.openclaude/web-access-state.json`), so they survive restarts and are shared between concurrent sessions. The file contains only short SHA-256 fingerprints of keys, **never the keys themselves**. It is a plain file, not tied to any MCP client. Use `WEB_ACCESS_STATE_FILE=/path/to/file.json` to move it, or `WEB_ACCESS_STATE_FILE=off` to keep everything in memory only.
+
+### Daily budgets
+
+These settings cap what an agent can spend per UTC day:
+
+```json
+{ "tavily": { "dailyCreditBudget": 100 }, "exa": { "dailyBudgetUsd": 1 } }
+```
+
+- **How spend is counted**: from what the APIs report, so it is exact. Tavily returns `usage.credits` on every call, and Exa returns `costDollars`. It is stored in the state file, so all sessions share it.
+- **When the budget is reached**: calls to that provider are refused until 00:00 UTC. `web_search` then falls back to the other provider.
+- **Checking it**: `web_access_status` shows today's spend next to the budget.
+- **Default**: no budget, which means no limit.
 
 ### Environment variables
 
@@ -382,9 +443,10 @@ Key cooldowns are saved to **`web-access-state.json` next to the config file** (
 | `EXA_API_KEYS` / `EXA_API_KEY` | Exa keys (comma separated). |
 | `WEB_SEARCH_PROVIDER` | Default provider (`auto`, `exa`, `tavily`, `both`). |
 | `WEB_ACCESS_CONFIG` | Path to the config file. |
-| `WEB_ACCESS_STATE_FILE` | Path to the cooldown state file, or `off`. |
+| `WEB_ACCESS_STATE_FILE` | Path to the state file (cooldowns, daily spend), or `off`. |
+| `WEB_ACCESS_CACHE_FILE` | Path to the persistent cache file (when `cachePersist` is on). |
 | `EXA_KEYS_FILE` / `TAVILY_KEYS_FILE` | Paths to the legacy key files. |
-| `GITHUB_TOKEN` / `GH_TOKEN` | GitHub token for `github_search`. |
+| `GITHUB_TOKEN` / `GH_TOKEN` | GitHub token for `github_search` and `github_read`. |
 
 Empty values and unfilled placeholders such as `${user_config.tavily_api_keys}` are ignored.
 
@@ -422,29 +484,30 @@ These are still supported for existing setups:
 | `web_search` in `both` | 1 search | 1 search |
 | `includeAnswer` | +1 `/answer` call (with a key) | answer included in the search |
 | `web_search_tavily` | none | `basic` 1 credit, `advanced` 2 credits |
-| `web_get_contents` | none | only used as a fallback: 1 credit per 5 pages |
+| `web_get_contents` | only as a fallback without Tavily: Exa `/contents` | only used as a fallback: 1 credit per 5 pages |
+| `web_search` with `queries` | one search per query | one search per query (if used) |
 | `web_extract_tavily` | none | 1 credit per 5 URLs (basic), 2 per 5 (advanced); failed URLs are free |
 | `web_map` | none | 1 credit per 10 pages (2 with `instructions`) |
 | `web_crawl` | none | map plus extract, e.g. 10 pages basic ≈ 3 credits |
 | Cached repeat | none | none |
 
-Credit numbers come from Tavily's credits documentation at the time of writing, and Exa bills per request in dollars. Both can change, so check [Tavily's credits page](https://docs.tavily.com/documentation/api-credits) and [Exa's billing page](https://exa.ai/docs/admin/billing). `web_access_status` shows your actual Tavily usage and Exa spend.
+Credit numbers come from Tavily's credits documentation at the time of writing, and Exa bills per request in dollars. Both can change, so check [Tavily's credits page](https://docs.tavily.com/documentation/api-credits) and [Exa's billing page](https://exa.ai/docs/admin/billing). `web_access_status` shows your actual Tavily usage and Exa spend. To put a hard cap on both, use the [daily budgets](#daily-budgets).
 
 ## Privacy and security
 
 - **What leaves your machine**:
   - search queries go to Exa (`api.exa.ai` or `mcp.exa.ai`) and/or Tavily (`api.tavily.com`)
-  - URLs you read are fetched **directly from your machine**, or sent to Tavily Extract when the fallback is used
+  - URLs you read are fetched **directly from your machine**, or sent to Tavily Extract / Exa contents when a fallback is used
   - GitHub queries go to `api.github.com`
-- **No telemetry**: nothing is sent anywhere else. The only file written is the cooldown [state file](#state-file), which holds fingerprints, not keys.
+- **No telemetry**: nothing is sent anywhere else. The files written are the [state file](#state-file), which holds key fingerprints (not keys) and today's spend, and, only if you turn on `cachePersist`, the result cache.
 - **Keys**: plugin keys are stored by Claude Code in your OS credential store. Keys are never logged, and `web_access_status` only shows masked keys.
 - **SSRF protection**: fetched pages are untrusted and can try to steer the model into requesting internal services. By default, `web_get_contents` refuses:
   - `localhost`
   - private and link-local ranges, including the cloud metadata address `169.254.169.254`
   - `.local` / `.internal` hosts
   - hostnames that resolve to any of these, checked again on every redirect
-  
-  Internal URLs are never forwarded to Tavily. This reduces risk but is not a full network sandbox (DNS rebinding could still race the check).
+
+  The address is also checked when the socket connects (a pinned DNS lookup), so a DNS-rebinding answer cannot slip in between the check and the connection. Internal URLs are never forwarded to Tavily or Exa.
 - **Resource limits**: direct downloads stop at 25 MB (`fetch.maxBytes`).
 - **Config file**: `~/.openclaude/web-access.json` is plain text. Keep it private and never commit it. This repo's `.gitignore` excludes it, the state file and the legacy key files.
 - **Leaked key**: if a key ever ends up in a chat, log or commit, rotate it in the provider's dashboard.
@@ -461,8 +524,11 @@ Credit numbers come from Tavily's credits documentation at the time of writing, 
 | `Exa error 403` with keyless Exa | Keyless Exa requires a direct IPv4 connection. It is refused over IPv6 or proxies. Add an Exa key. |
 | `refusing to fetch internal address …` | This is the SSRF protection. To read local or intranet docs, set `"fetch": {"allowPrivateNetwork": true}`. |
 | `request timed out` | Slow network or provider. Retry, or raise `timeoutMs`. |
-| `PDF documents are not supported by the direct fetcher` | Add a Tavily key. PDFs are then extracted automatically. |
-| A page returns almost no text | The page is probably JS-rendered. With a Tavily key this is retried automatically. Otherwise, find another source. |
+| `PDF documents are not supported by the direct fetcher` | Add a Tavily or Exa key. PDFs are then extracted automatically. |
+| A page returns almost no text | The page is probably JS-rendered. With a Tavily or Exa key this is retried automatically. Otherwise, find another source. |
+| `Daily Tavily budget reached` / `Daily Exa budget reached` | Your [daily budget](#daily-budgets) is used up. It resets at 00:00 UTC. Raise the budget, or let `web_search` use the other provider meanwhile. |
+| `daily_cap_reached` with `tavily.keyless` | Tavily's keyless mode has a small per-IP daily cap. Add a Tavily key. |
+| Some results are missing from one site | `maxPerDomain` (default 3) hides extra results from the same domain, and the result says how many. Pass `maxPerDomain: 0` or use `site`. |
 | `Tavily error 403` on map/crawl | Tavily does not support that URL. Use `web_get_contents` on individual pages. |
 | `GitHub API requires authentication` | Code search always needs auth. Run `gh auth login`, or set `GITHUB_TOKEN`. |
 | Results look stale | Pass `fresh: true`, or set `cacheTtlSeconds` to `0`. |
@@ -483,7 +549,7 @@ Restart Claude Code after updating. To remove the plugin:
 /plugin marketplace remove mahdyarief
 ```
 
-Your config and state files (`~/.openclaude/web-access*.json`) are left untouched. Delete them yourself if you no longer need them.
+Your config, state and cache files (`~/.openclaude/web-access*.json`) are left untouched. Delete them yourself if you no longer need them.
 
 ## Project structure
 
@@ -496,21 +562,24 @@ Your config and state files (`~/.openclaude/web-access*.json`) are left untouche
 .mcp.json             MCP server definition (passes plugin options as env)
 skills/
   web-research/       when to use which tool
+  research/           /web-access:research (multi-step research with citations)
   setup/              /web-access:setup
 server.js             stdio JSON-RPC / MCP entry point
-tools.js              tool schemas, provider routing, answers, map/crawl, status
+tools.js              tool schemas + annotations, routing, multi-query, answers, status
 config.js             config file + env helpers (hot reload)
-exa-client.js         Exa REST (keyed) + MCP (keyless) client, rotation, spend
+exa-client.js         Exa REST (keyed) + MCP (keyless) client, /answer, /contents, spend
 exa-rotator.js        Exa key loading + round-robin
-tavily-client.js      Tavily search/extract/map/crawl/usage client
+tavily-client.js      Tavily search/extract/map/crawl/usage, keyless mode, credits
 tavily-rotator.js     Tavily key loading + round-robin
-key-health.js         per-key cooldowns, persisted state file, masking
-cache.js              in-memory TTL cache
-formatter.js          shared result model, compact snippets, rank fusion
-web-fetcher.js        direct fetch: redirects, size cap, HTML → text, paging
-url-guard.js          SSRF protection (private/loopback/link-local refusal)
-github-client.js      GitHub search
-test/                 node:test suite (fully mocked)
+key-health.js         per-key cooldowns, state file, masking
+budget.js             daily spend tracking + budgets
+cache.js              TTL cache, in-flight sharing, optional disk persistence
+formatter.js          result model, filters, rank fusion, domain cap, crawl dedupe
+web-fetcher.js        direct fetch: pinned transport, redirects, size cap, find, paging
+html-markdown.js      HTML parser + Markdown renderer (main content, boilerplate removal)
+url-guard.js          SSRF protection (URL check + connect-time pinned lookup)
+github-client.js      GitHub search + read (README, files, folders)
+test/                 node:test suite (mocked APIs + a local HTTP server)
 ```
 
 ## Development and releasing

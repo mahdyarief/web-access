@@ -1,0 +1,19 @@
+{
+  "name": "web-access-mcp",
+  "version": "1.3.0",
+  "description": "Local MCP server for web search (Exa + Tavily with API key rotation), URL content extraction and GitHub search. Zero dependencies.",
+  "main": "server.js",
+  "bin": {
+    "web-access-mcp": "server.js"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/providers.test.js test/content.test.js"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "keywords": ["mcp", "model-context-protocol", "web-search", "exa", "tavily", "api-key-rotation", "github-search"],
+  "license": "UNLICENSED",
+  "files": ["*.js", ".claude-plugin/", ".mcp.json", "web-access.example.json", "README.md"]
+}

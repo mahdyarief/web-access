@@ -1,0 +1,12 @@
+node_modules/
+# local tool caches
+graft/
+.trail/
+# never commit real keys
+web-access.json
+exa_keys.json
+tavily_keys.json
+*.local.json
+.env
+.env.*
+.ignore

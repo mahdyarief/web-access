@@ -14,7 +14,6 @@
 const http = require("http");
 const https = require("https");
 const zlib = require("zlib");
-const { Readable } = require("stream");
 const { assertPublicUrl, pinnedLookup, BlockedUrlError } = require("./url-guard");
 const { htmlToMarkdown, htmlTitle } = require("./html-markdown");
 
@@ -40,8 +39,29 @@ function fetchSettings() {
 }
 
 /**
+ * Minimal reader over a Node stream with the subset of the web-stream API we
+ * use (getReader().read()/cancel(), body.cancel()). Avoids Readable.toWeb,
+ * which throws "Controller is already closed" on cancel in Node 18.
+ */
+function nodeBody(stream, res) {
+  const it = stream[Symbol.asyncIterator]();
+  const destroy = async () => {
+    stream.destroy();
+    if (res !== stream) res.destroy();
+  };
+  const reader = {
+    async read() {
+      const r = await it.next();
+      return r.done ? { done: true, value: undefined } : { done: false, value: r.value };
+    },
+    cancel: destroy,
+  };
+  return { getReader: () => reader, cancel: destroy };
+}
+
+/**
  * GET over node:http(s) with the pinned lookup. Returns a minimal
- * fetch-like response: { ok, status, statusText, headers, body (web stream) }.
+ * fetch-like response: { ok, status, statusText, headers, body }.
  */
 function pinnedFetch(url, { signal, headers, allowPrivate }) {
   return new Promise((resolve, reject) => {
@@ -72,7 +92,7 @@ function pinnedFetch(url, { signal, headers, allowPrivate }) {
           status: res.statusCode,
           statusText: res.statusMessage || "",
           headers: h,
-          body: Readable.toWeb(stream),
+          body: nodeBody(stream, res),
         });
       }
     );

@@ -311,7 +311,9 @@ test("pinned transport: refuses private IPs at connect time, decodes gzip, follo
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Encoding": "gzip" });
     res.end(zlib.gzipSync(html));
   });
-  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  // No host → dual-stack (:: + IPv4), so "localhost" works whether it resolves
+  // to ::1 (Node 18 without happy-eyeballs) or 127.0.0.1.
+  await new Promise((r) => server.listen(0, r));
   const port = server.address().port;
   const prev = process.env.WEB_ACCESS_DIRECT_TRANSPORT;
   try {

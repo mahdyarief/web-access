@@ -51,7 +51,15 @@ function setup(config = {}, handler = () => ok({})) {
       signal: init.signal,
     };
     calls.push(call);
-    return handler(call, calls);
+    // A real in-flight fetch keeps the event loop alive (open socket). Mirror
+    // that, otherwise a never-resolving mock + AbortSignal.timeout (unref'd
+    // timer) lets Node exit before the abort fires.
+    const keepAlive = setInterval(() => {}, 1000);
+    try {
+      return await handler(call, calls);
+    } finally {
+      clearInterval(keepAlive);
+    }
   };
 
   const origError = console.error;
